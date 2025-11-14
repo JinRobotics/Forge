@@ -1,4 +1,3 @@
-# Performance Benchmarks & Testing Plan
 
 > **문서 버전:** v1.0 (2025-02-14)  
 > **변경 이력:**  

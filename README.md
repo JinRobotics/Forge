@@ -1,6 +1,6 @@
-# LK Synthetic Data Generation (lk_sdg)
+# SynCCTV
 
-CCTV Synthetic Data Generation Engine - Unity 기반 합성 데이터 생성 시스템
+Synthetic CCTV Data Generation Engine - Unity 기반 합성 데이터 생성 시스템
 
 ---
 
@@ -22,7 +22,7 @@ CCTV Synthetic Data Generation Engine - Unity 기반 합성 데이터 생성 시
 ### 현재 디렉터리
 
 ```
-lk_sdg/
+SynCCTV/
 ├── docs/                 # 컨셉·요구사항·설계 문서
 │   ├── concept/
 │   │   ├── 0_Concept_Document.md
