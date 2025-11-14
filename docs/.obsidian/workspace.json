@@ -1,0 +1,224 @@
+{
+  "main": {
+    "id": "e305dbd0e8f2fa68",
+    "type": "split",
+    "children": [
+      {
+        "id": "3226002dad874cc1",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "f92c618fe33307ac",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "concept/1_User_Requirements.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "1_User_Requirements"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "a3f2c2b27d5286a1",
+    "type": "split",
+    "children": [
+      {
+        "id": "f19c0c0304c341a0",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "bfbca42ac3ea8eaf",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "파일 탐색기"
+            }
+          },
+          {
+            "id": "e63ea1837105db62",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "검색"
+            }
+          },
+          {
+            "id": "9b43facb3bbe58d6",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "북마크"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "ff762efcf92f25cf",
+    "type": "split",
+    "children": [
+      {
+        "id": "71bc147bc4134f52",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "39114828afc70cf9",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "Concept/2. User Requirements.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "2. User Requirements 의 백링크"
+            }
+          },
+          {
+            "id": "039f8fa30b59506a",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "Concept/2. User Requirements.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "2. User Requirements 의 나가는 링크"
+            }
+          },
+          {
+            "id": "2964d4db29a0e52e",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "태그"
+            }
+          },
+          {
+            "id": "e53244508e1c642f",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "모든 속성"
+            }
+          },
+          {
+            "id": "0a7c4efbc1d58b57",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "Concept/2. User Requirements.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "2. User Requirements 의 개요"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:빠른 전환기 열기": false,
+      "graph:그래프 뷰 열기": false,
+      "canvas:새 캔버스 만들기": false,
+      "daily-notes:오늘의 일일 노트 열기": false,
+      "templates:템플릿 삽입": false,
+      "command-palette:명령어 팔레트 열기": false,
+      "bases:새 베이스 생성하기": false
+    }
+  },
+  "active": "f92c618fe33307ac",
+  "lastOpenFiles": [
+    "README.md",
+    "concept/0_Concept_Document.md",
+    "design/0_Repo Structure.md",
+    "design/1_System_Requirements.md",
+    "design/3_Class_Design_Document.md",
+    "design/README.md",
+    "design/9_Security_and_Compliance.md",
+    "design/2_System_Architecture.md",
+    "design/4_Data_Pipeline_Specification.md",
+    "design/6_Test_Strategy.md",
+    "design/7_Performance_Benchmarks.md",
+    "design/5_API Specification.md",
+    "design/8_Checkpoint_Mechanism.md",
+    "concept/1_User_Requirements.md",
+    "design/README.md.tmp.7749.1763109663961",
+    "design/4_Data_Pipeline_Specification.md.tmp.7749.1763109651843",
+    "design/3_Class_Design_Document.md.tmp.7749.1763109626438",
+    "design/2_System_Architecture.md.tmp.7749.1763109596259",
+    "design/README.md.tmp.7749.1763109301361",
+    "design/9_Security_and_Compliance.md.tmp.7749.1763109246225",
+    "design/8_Checkpoint_Mechanism.md.tmp.7749.1763109159314",
+    "design/7_Performance_Benchmarks.md.tmp.7749.1763109069700",
+    "design/6_Test_Strategy.md.tmp.7749.1763108991528",
+    "design/diagrams/README.md",
+    "design/diagrams/README.md.tmp.7749.1763108850076",
+    "design/2_System_Requirements_v2.md",
+    "design/3_System_Architecture_v2.md",
+    "concept/0_Concept_Document_v2.md",
+    "concept/1_User_Requirements_v2.md",
+    "5_Data_Pipeline_Specification_v2.md",
+    "design/5_Data_Pipeline_Specification_v2.md",
+    "design/4_Class_Design_Document_v2.md",
+    "4_Class_Design_Document_v2.md",
+    "3_System_Architecture_v2.md",
+    "2_System_Requirements_v2.md"
+  ]
+}

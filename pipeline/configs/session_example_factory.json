@@ -1,0 +1,61 @@
+{
+  "sessionId": "session_factory_phase1_001",
+  "totalFrames": 100000,
+  "outputDirectory": "/data/output",
+  "scenes": [
+    {
+      "name": "Factory",
+      "durationFrames": 100000
+    }
+  ],
+  "cameras": [
+    {
+      "id": "cam01",
+      "resolution": "1920x1080",
+      "fov": 70,
+      "position": [10, 5, -20],
+      "rotation": [15, 180, 0]
+    },
+    {
+      "id": "cam02",
+      "resolution": "1920x1080",
+      "fov": 60,
+      "position": [-15, 6, -10],
+      "rotation": [20, 90, 0]
+    },
+    {
+      "id": "cam03",
+      "resolution": "1280x720",
+      "fov": 80,
+      "position": [0, 8, 15],
+      "rotation": [25, 270, 0]
+    }
+  ],
+  "crowd": {
+    "minCount": 20,
+    "maxCount": 30,
+    "behavior": {
+      "idleProbability": 0.1,
+      "walkSpeedRange": [0.8, 1.5],
+      "groupMove": {
+        "enabled": false
+      }
+    }
+  },
+  "timeWeather": {
+    "timeOfDay": "day",
+    "brightness": 1.0,
+    "weather": "clear"
+  },
+  "output": {
+    "imageFormat": "jpg",
+    "labelFormats": ["json"],
+    "reidDataset": {
+      "enabled": false
+    },
+    "manifest": {
+      "enabled": true,
+      "schemaVersion": "1.0.0"
+    }
+  }
+}

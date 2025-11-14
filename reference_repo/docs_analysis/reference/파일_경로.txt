@@ -1,0 +1,236 @@
+ABSOLUTE FILE PATHS - REFERENCE GUIDE
+=====================================
+
+ANALYSIS DOCUMENTS (START HERE):
+
+1. 00_START_HERE.md
+   Full path: /home/jinhyuk2me/test_ws/lk_sdg/00_START_HERE.md
+   Purpose: Entry point - read this first
+   Size: 4.3 KB
+
+2. INDEX_PERCEPTION_ANALYSIS.md
+   Full path: /home/jinhyuk2me/test_ws/lk_sdg/INDEX_PERCEPTION_ANALYSIS.md
+   Purpose: Navigation guide and document index
+   Size: 8.2 KB
+
+3. README_PERCEPTION_ANALYSIS.md
+   Full path: /home/jinhyuk2me/test_ws/lk_sdg/README_PERCEPTION_ANALYSIS.md
+   Purpose: Executive summary and quick start
+   Size: 7.0 KB
+
+4. PERCEPTION_ANALYSIS.md
+   Full path: /home/jinhyuk2me/test_ws/lk_sdg/PERCEPTION_ANALYSIS.md
+   Purpose: Architecture overview (max 100 lines)
+   Size: 4.1 KB
+
+5. PERCEPTION_DIRECTORY_MAP.txt
+   Full path: /home/jinhyuk2me/test_ws/lk_sdg/PERCEPTION_DIRECTORY_MAP.txt
+   Purpose: Complete file structure reference
+   Size: 6.2 KB
+
+6. PERCEPTION_KEY_REFERENCES.md
+   Full path: /home/jinhyuk2me/test_ws/lk_sdg/PERCEPTION_KEY_REFERENCES.md
+   Purpose: Detailed developer reference
+   Size: 7.1 KB
+
+REFERENCE SOURCE CODE:
+
+Perception Package Root:
+  /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/
+
+Main Package Directory:
+  /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/
+
+CRITICAL FILES FOR CCTV IMPLEMENTATION:
+
+1. Core Capture System
+   PerceptionCamera.cs
+   - /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/GroundTruth/PerceptionCamera.cs
+   
+   DatasetCapture.cs
+   - /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/GroundTruth/DatasetCapture.cs
+   
+   SimulationState.cs
+   - /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/GroundTruth/SimulationState.cs
+
+2. Labeler System (Base & Examples)
+   CameraLabeler.cs
+   - /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/GroundTruth/Labelers/CameraLabeler.cs
+   
+   BoundingBoxLabeler.cs (example)
+   - /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/GroundTruth/Labelers/BoundingBox/BoundingBoxLabeler.cs
+   
+   ObjectCountLabeler.cs (simple metric example)
+   - /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/GroundTruth/Labelers/ObjectCount/ObjectCountLabeler.cs
+
+3. Randomization Framework
+   ScenarioBase.cs
+   - /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/Randomization/Scenarios/ScenarioBase.cs
+   
+   Randomizer.cs
+   - /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/Randomization/Randomizers/Randomizer.cs
+   
+   RandomizerTagManager.cs
+   - /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/Randomization/Randomizers/RandomizerTagManager.cs
+   
+   Parameter.cs
+   - /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/Randomization/Parameters/Parameter.cs
+   
+   TransformRandomizer.cs (example)
+   - /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/RandomizerLibrary/Transform/TransformRandomizer.cs
+
+4. Output & Serialization
+   IConsumerEndpoint.cs
+   - /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/GroundTruth/Consumers/IConsumerEndpoint.cs
+   
+   SoloEndpoint.cs
+   - /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/GroundTruth/Consumers/Solo/SoloEndpoint.cs
+   
+   Frame.cs (data model)
+   - /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/GroundTruth/DataModel/Frame.cs
+
+5. Sensor System
+   CameraSensor.cs
+   - /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/GroundTruth/Sensors/CameraSensor.cs
+   
+   CircularFisheyeCameraSensor.cs (special sensor example)
+   - /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/GroundTruth/Sensors/SensorTypes/CircularFisheyeCameraSensor.cs
+
+6. Label Management
+   IdLabelConfig.cs
+   - /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/GroundTruth/LabelManagement/IdLabelConfig.cs
+   
+   Labeling.cs
+   - /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/GroundTruth/LabelManagement/Labeling.cs
+
+DIRECTORY STRUCTURE (Quick Reference):
+
+GroundTruth (Data Capture & Annotation):
+  /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/GroundTruth/
+
+Randomization (Domain Randomization):
+  /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/Randomization/
+
+RandomizerLibrary (Pre-built Randomizers):
+  /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/RandomizerLibrary/
+
+Labelers (All 15 Types):
+  /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/GroundTruth/Labelers/
+  
+  Subdirectories:
+  - BoundingBox/
+  - BoundingBox3D/
+  - Depth/
+  - InstanceSegmentation/
+  - Keypoints/
+  - MetadataReporter/
+  - Normal/
+  - ObjectCount/
+  - Occlusion/
+  - PixelPosition/
+  - RenderedObjectInfo/
+  - SemanticSegmentation/
+  - Visualization/
+
+Consumers (Output Endpoints):
+  /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/GroundTruth/Consumers/
+  
+  Implementations:
+  - Solo/ (SOLO JSON format)
+  - PerceptionEndpoint.cs (alternative format)
+  - NoOutputEndpoint.cs (discard mode)
+
+DataModel (Serialization):
+  /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/GroundTruth/DataModel/
+
+Sensors:
+  /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/GroundTruth/Sensors/
+  
+  Types:
+  - SensorTypes/UnityCameraSensor.cs
+  - SensorTypes/CubemapCameraSensor.cs
+  - SensorTypes/CircularFisheyeCameraSensor.cs
+
+LabelManagement:
+  /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/GroundTruth/LabelManagement/
+
+Parameters (Randomization):
+  /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/Randomization/Parameters/
+  
+  Types:
+  - NumericParameter.cs
+  - CategoricalParameter.cs
+
+Samplers (Value Generation):
+  /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/Randomization/Samplers/
+  
+  Types:
+  - SamplerTypes/UniformSampler.cs
+  - SamplerTypes/NormalSampler.cs
+  - SamplerTypes/ConstantSampler.cs
+  - SamplerTypes/AnimationCurveSampler.cs
+
+Randomizer Library (Pre-built):
+  /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/RandomizerLibrary/
+  
+  Types:
+  - Transform/
+  - Light/
+  - Material Property/
+  - Material Swapper/
+  - Substance/
+  - Skybox/
+  - Volume/ (with effects subdirectory)
+  - Scene/
+  - Camera/
+
+Documentation:
+  /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Documentation~/
+
+QUICK COPY-PASTE PATHS:
+
+For PerceptionCamera reference:
+  /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/GroundTruth/PerceptionCamera.cs
+
+For Labeler base class:
+  /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/GroundTruth/Labelers/CameraLabeler.cs
+
+For Randomizer base class:
+  /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/Randomization/Randomizers/Randomizer.cs
+
+For output endpoint interface:
+  /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/GroundTruth/Consumers/IConsumerEndpoint.cs
+
+For SOLO output implementation:
+  /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Runtime/GroundTruth/Consumers/Solo/SoloEndpoint.cs
+
+DOCUMENTATION FILES:
+
+Package README:
+  /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/README.md
+
+PerceptionCamera Guide:
+  /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Documentation~/PerceptionCamera.md
+
+DatasetCapture Guide:
+  /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Documentation~/DatasetCapture.md
+
+Randomization Guide:
+  /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Documentation~/Randomization/index.md
+
+Labeling Guide:
+  /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Documentation~/GroundTruthLabeling.md
+
+Output Guide:
+  /home/jinhyuk2me/test_ws/lk_sdg/reference_repo/com.unity.perception/com.unity.perception/Documentation~/Outputs.md
+
+HOW TO USE THIS FILE:
+
+1. For quick navigation: Copy the path that matches your need
+2. For file searching: Use grep with these paths
+3. For code review: Open files in your IDE using these absolute paths
+4. For referencing in documentation: Use these as definitive file locations
+
+GENERATED: 2025-11-14
+PURPOSE: CCTV Synthetic Data Generation Analysis
+PACKAGE: Unity Perception (community-maintained)

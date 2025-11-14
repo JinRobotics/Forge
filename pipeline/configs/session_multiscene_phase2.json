@@ -1,0 +1,109 @@
+{
+  "sessionId": "session_multiscene_phase2_001",
+  "totalFrames": 500000,
+  "outputDirectory": "/data/output",
+  "scenes": [
+    {
+      "name": "Factory",
+      "durationFrames": 250000
+    },
+    {
+      "name": "Office",
+      "durationFrames": 150000
+    },
+    {
+      "name": "Warehouse",
+      "durationFrames": 100000
+    }
+  ],
+  "cameras": [
+    {
+      "id": "cam01",
+      "resolution": "1920x1080",
+      "fov": 70,
+      "position": [10, 5, -20],
+      "rotation": [15, 180, 0],
+      "sensorNoise": {
+        "enabled": true,
+        "gaussianStdDev": 0.03
+      }
+    },
+    {
+      "id": "cam02",
+      "resolution": "1920x1080",
+      "fov": 60,
+      "position": [-15, 6, -10],
+      "rotation": [20, 90, 0]
+    },
+    {
+      "id": "cam03",
+      "resolution": "1280x720",
+      "fov": 80,
+      "position": [0, 8, 15],
+      "rotation": [25, 270, 0]
+    },
+    {
+      "id": "cam04",
+      "resolution": "1920x1080",
+      "fov": 65,
+      "position": [20, 4, 0],
+      "rotation": [10, 0, 0]
+    }
+  ],
+  "crowd": {
+    "minCount": 30,
+    "maxCount": 80,
+    "behavior": {
+      "idleProbability": 0.15,
+      "walkSpeedRange": [0.6, 1.8],
+      "groupMove": {
+        "enabled": true,
+        "sizeRange": [3, 6]
+      }
+    }
+  },
+  "timeWeather": {
+    "timeOfDay": "day",
+    "brightness": 1.0,
+    "weather": "clear"
+  },
+  "randomization": {
+    "enabled": true,
+    "brightnessRange": [0.8, 1.2],
+    "colorTemperatureRange": [4500, 7500],
+    "cameraNoiseLevel": 0.05,
+    "weatherPool": ["clear", "rainy"]
+  },
+  "output": {
+    "imageFormat": "jpg",
+    "labelFormats": ["json", "yolo"],
+    "reidDataset": {
+      "enabled": true,
+      "outputPath": "reid_dataset"
+    },
+    "manifest": {
+      "enabled": true,
+      "schemaVersion": "1.0.0"
+    }
+  },
+  "pipeline": {
+    "workerConcurrency": {
+      "capture": 1,
+      "detection": 2,
+      "tracking": 1,
+      "encode": 2,
+      "storage": 2
+    },
+    "queueSize": {
+      "capture": 512,
+      "detection": 512,
+      "tracking": 2048,
+      "encode": 2048,
+      "storage": 4096
+    },
+    "checkpoint": {
+      "enabled": true,
+      "intervalFrames": 10000
+    }
+  }
+}
