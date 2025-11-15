@@ -1,0 +1,24 @@
+%% Forge Data Pipeline (Mermaid)
+graph LR
+    Capture[CaptureWorker\n(Unity -> Raw Frame)] --> Queue1((RawQueue))
+    Queue1 --> Detection[DetectionWorker]
+    Detection --> Queue2((DetectionQueue))
+    Queue2 --> Tracking[TrackingWorker]
+    Tracking --> Queue3((TrackingQueue))
+    Queue3 --> Occlusion[OcclusionWorker]
+    Occlusion --> Queue4((OcclusionQueue))
+    Queue3 --> ReID[ReIDExportWorker]
+    Queue4 --> LabelAssembler[LabelAssembler]
+    LabelAssembler --> Queue5((LabeledQueue))
+    Queue5 --> Encode[EncodeWorker]
+    Encode --> Queue6((EncodedQueue))
+    Queue6 --> Storage[StorageWorker]
+    Storage --> Manifest[ManifestService]
+    Storage --> Validation[ValidationService]
+    Storage --> Export[Edge/Custom Export]
+
+    PipeCoord[PipelineCoordinator] -.health polling.-> Capture
+    PipeCoord -.health polling.-> Detection
+    PipeCoord -.health polling.-> Tracking
+    PipeCoord -.health polling.-> Encode
+    PipeCoord -.health polling.-> Storage

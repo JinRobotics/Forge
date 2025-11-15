@@ -471,6 +471,76 @@ CREATE INDEX idx_job_session ON job_queue(session_id);
 
 ---
 
+### 4.9 SENSOR_ARTIFACT 테이블 (Phase 4)
+
+역할: Robotics Extension에 의해 생성되는 센서 Export(로봇 pose, LiDAR, IMU, wheel odom, depth)에 대한 메타데이터와 품질 정보를 저장한다. manifest.sensorArtifacts[]와 1:1로 매핑되어 품질 보고 및 사고 대응 근거를 제공한다.
+
+```sql
+CREATE TABLE IF NOT EXISTS sensor_artifact (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    frame_id INTEGER NOT NULL,
+    sensor_type TEXT NOT NULL,
+        -- 'robot_pose','lidar','imu','wheel_odom','depth'
+    format TEXT NOT NULL,
+        -- 'tum','kitti','forge-custom'
+    file_path TEXT NOT NULL,
+    file_size_bytes INTEGER NOT NULL,
+    checksum TEXT NOT NULL,
+    quality_metadata TEXT,
+        -- JSON: {"noiseStd":0.02,"syncDriftMs":3,"dropReason":"timeout"}
+    status TEXT NOT NULL DEFAULT 'completed',
+        -- 'completed','dropped','failed'
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (session_id) REFERENCES session(session_id) ON DELETE CASCADE,
+    CHECK (frame_id >= 0)
+);
+
+CREATE INDEX idx_sensor_artifact_session ON sensor_artifact(session_id, sensor_type);
+CREATE INDEX idx_sensor_artifact_frame ON sensor_artifact(frame_id);
+```
+
+보안/품질 지침:
+- `file_path`는 세션 출력 루트(`/output/<session>/sensors/...`)만 허용하며, Repository 계층에서 경로 정규화/검증을 수행한다.
+- `quality_metadata`에는 사용자 이름, 시스템 경로 등 민감 정보가 포함되지 않도록 `Security_and_Compliance.md` §2.4의 필터링 규칙을 재사용한다.
+
+### 4.10 ROBOTICS_SYNC_STATE 테이블 (Phase 4)
+
+역할: MultiSimSyncCoordinator가 Unity ↔ Isaac 간 동기화 상태를 기록해 재시작 및 성능 분석에 활용한다.
+
+```sql
+CREATE TABLE IF NOT EXISTS robotics_sync_state (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    frame_id INTEGER NOT NULL,
+    unity_frame_timestamp REAL NOT NULL,
+    robotics_frame_timestamp REAL NOT NULL,
+    sync_offset_ms REAL NOT NULL,
+    policy_max_delay_ms REAL NOT NULL,
+    policy_timeout_ms REAL NOT NULL,
+    policy_on_timeout TEXT NOT NULL,
+        -- 'skip','abort'
+    status TEXT NOT NULL,
+        -- 'in_sync','delayed','timeout','dropped'
+    notes TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (session_id) REFERENCES session(session_id) ON DELETE CASCADE,
+    CHECK (frame_id >= 0)
+);
+
+CREATE INDEX idx_robotics_sync_session ON robotics_sync_state(session_id);
+CREATE INDEX idx_robotics_sync_status ON robotics_sync_state(status);
+```
+
+활용 시나리오:
+- Checkpoint 복구 시 마지막으로 동기화된 frame_id와 sync_offset을 조회해 Isaac 재시작 지점을 계산.
+- Validation/Manifest에서 `sensorDriftWarning` 계산 시 해당 테이블을 집계해 보고.
+- Incident Response에서 특정 시간대의 Isaac 장애 상태를 트레이싱.
+
+---
+
 ## 5. 데이터 흐름 (Data Flow)
 
 ### 5.1 Session 생명주기

@@ -501,7 +501,28 @@ def generate_report(manifest_path):
 
 ---
 
-## 10. 참고 자료
+## 10. 측정 데이터 관리 절차
+
+Phase별 목표 대비 실제 측정치를 추적하기 위해 다음 절차를 표준화한다.
+
+1. **결과 수집**
+   - 세션 종료 후 `meta/manifest.json`과 Prometheus(또는 BenchmarkDotNet) raw 결과를 `pipeline/validation/perf_logs/<YYYYMMDD>_<scenario>.json`으로 복사한다.
+   - `tools/generate_perf_report.py`를 실행해 Markdown 요약을 생성하고 같은 디렉터리에 저장한다.
+2. **카탈로그 업데이트**
+   - `pipeline/validation/perf_logs/index.csv`에 Run ID, Scenario, Commit SHA, 하드웨어 스펙, FPS/메모리/큐 지표, Pass/Fail 여부를 append한다.
+   - Run ID는 `PERF-<date>-<seq>` 형식으로 관리한다.
+3. **리뷰 & 회귀 감시**
+   - PR/릴리스 시 최신 Pass 기록과 목표치 비교 그래프를 README 또는 Dashboard에 첨부한다.
+   - Threshold 초과 시 자동 알림(예: GitHub Status, Slack)을 트리거하여 Regression을 조기 감지한다.
+4. **보관 정책**
+   - 원본 메트릭 파일은 1년 보관, 요약 리포트는 무기한 보관한다.
+   - 기밀 하드웨어 정보(IP/호스트명)는 `Security_and_Compliance.md` §2.4 규칙에 따라 마스킹한다.
+
+해당 절차는 QA/Perf 엔지니어의 공용 체크리스트로 간주하며, 위 경로 구조가 생성돼 있지 않다면 초기화 스크립트를 통해 빈 카탈로그를 만들어야 한다.
+
+---
+
+## 11. 참고 자료
 
 - [Unity Profiler Manual](https://docs.unity3d.com/Manual/Profiler.html)
 - [BenchmarkDotNet Documentation](https://benchmarkdotnet.org/)

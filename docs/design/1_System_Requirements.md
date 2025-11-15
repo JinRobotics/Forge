@@ -271,6 +271,36 @@ Edge 디바이스 용도를 위해 다음을 지원해야 한다:
 
 ---
 
+## 4.10 Robotics Integration (Phase 4+)
+
+Robotics Extension 문서(`docs/design/12_Robotics_Extension.md`)에서 정의한 Phase 4 요구를 상위 요구사항에 편입한다. 본 섹션은 Unity 기반 CCTV 시뮬레이션과 Isaac/로봇 센서 백엔드를 동기화하기 위해 추가되는 기능 범위를 정의한다.
+
+### **FR-41. 센서 Ground Truth Export**
+- Session 출력에 `sensors/` 디렉터리를 생성하고 robot_pose/lidar/imu/wheel_odom/depth 별 서브 디렉터리와 파일 형식을 제공해야 한다.
+- 각 센서 아티팩트에는 FrameContext.frame_id/timestamp가 포함되어야 하며, manifest `sensorArtifacts[]`에 성공/실패, 포맷(TUM/KITTI/Forge custom), checksum을 기록한다.
+
+### **FR-42. Frame-aligned 센서 동기화**
+- `FrameContext`는 `RobotPose` 및 `SensorMeta`를 포함할 수 있어야 하며, Unity/Isaac 시뮬레이션 시간은 동일 deltaTime을 사용한다.
+- `syncPolicy`(maxDelayMs, timeoutMs, onTimeout)를 만족해야 하며, 허용 지연 초과 시 strict 모드는 세션을 FAIL, relaxed 모드는 해당 센서 샘플을 drop 처리 후 manifest에 기록한다.
+
+### **FR-43. Config 기반 Robotics 정의**
+- SessionConfig는 `robotics.enabled`, `backend`, `robotModel`, 센서별 on/off 및 노이즈 파라미터를 선언할 수 있어야 하며, Orchestration 계층은 이를 검증해야 한다.
+- Robotics가 비활성화된 경우 기존 CCTV 기능은 영향을 받지 않아야 한다.
+
+### **FR-44. SLAM-friendly Export**
+- 최소한 TUM RGB-D 포맷을 지원해야 하며, KITTI 및 Forge Custom 포맷은 선택 제공한다.
+- Export 디렉터리 구조와 파일명 규칙은 Robotics Extension 문서와 일치해야 하며, manifest에 어떤 포맷이 활성화됐는지 표기한다.
+
+### **FR-45. Isaac/Robotics Gateway 장애 처리**
+- `IRoboticsGateway`와의 통신 실패 시 재시도/타임아웃/격리 정책을 제공하고, syncPolicy에 따라 skip 또는 session abort를 결정해야 한다.
+- MultiSimSyncCoordinator는 Unity/Isaac 모두에서 동일 frame_id를 생산하지 못한 경우 경고를 로깅하고, strict 모드에서는 세션 실패로 간주한다.
+
+### **FR-46. Sensor Quality Metadata**
+- 각 센서 샘플에는 노이즈/신뢰도 등의 품질 메타데이터가 포함되어야 하며, Validation 단계에서 누락·드리프트 여부를 검증한다.
+- manifest.validationSummary에는 `sensorMissingCount`, `sensorDriftWarning` 등을 포함해야 한다.
+
+---
+
 # 5. Non-Functional Requirements (NFR)
 
 ## 5.1 Performance

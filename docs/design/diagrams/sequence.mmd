@@ -1,0 +1,32 @@
+%% Session Execution Sequence
+sequenceDiagram
+    participant User
+    participant GenerationCommand as GenerationCommand
+    participant SessionManager as SessionManager
+    participant ScenarioManager as ScenarioManager
+    participant GenerationController as GenerationController
+    participant Gateway as ISimulationGateway
+    participant Unity as Unity Simulation
+    participant Pipeline as FrameBus/Workers
+    participant Storage as StorageWorker
+    participant Manifest as ManifestService
+    participant Validation as ValidationService
+    participant Progress as ProgressReporter
+
+    User->>GenerationCommand: start --config session.json
+    GenerationCommand->>SessionManager: Initialize(config)
+    SessionManager->>ScenarioManager: BuildScenarios()
+    SessionManager->>GenerationController: Start(frameLoop)
+    GenerationController->>Gateway: PrepareScene(sceneContext)
+    Gateway->>Unity: LoadScene + ApplyConfig
+    loop per frame
+        GenerationController->>Gateway: CaptureFrame(cameraSet)
+        Gateway->>Pipeline: PushRawFrame
+        Pipeline->>Pipeline: Detection/Tracking/Occlusion
+        Pipeline->>Storage: Encode + Persist
+        Storage->>Manifest: Update manifest
+        Storage->>Validation: Queue validation jobs
+    end
+    Validation-->>Progress: Report session health
+    Manifest-->>Progress: Emit session manifest info
+    Progress-->>User: status + metrics

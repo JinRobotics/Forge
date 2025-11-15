@@ -454,6 +454,15 @@ jobs:
 - [ ] Dataset Quality Validation: Diversity/Balance/Realism Score
 - [ ] 분산 환경 테스트 (Multi-GPU, Multi-machine)
 
+### Phase 4 (Robotics Extension)
+**목표**: Unity + Isaac 동기화 및 센서 Export 품질 보증
+
+- [ ] MultiSimSyncCoordinator/IRoboticsGateway 계약 테스트: Frame-aligned step, syncPolicy(maxDelayMs/timeoutMs/onTimeout) 준수
+- [ ] 센서 Ground Truth 통합 테스트: robot_pose/lidar/imu/wheel_odom/depth 디렉터리 구조, manifest.sensorArtifacts checksum 검증
+- [ ] SLAM Export 회귀 테스트: TUM/KITTI 파일 수 = frame 수 ±1%, timestamp 단조 증가, trajectory drift < 1% (허용 오차)
+- [ ] Sensor Quality Validation: 누락/드리프트/포맷 오류 시 ValidationService가 `sensorMissingCount`, `sensorDriftWarning`을 기록하는지 확인
+- [ ] 장애 복원력 테스트: Isaac 지연/오류 주입 시 strict 모드 FAIL, relaxed 모드 drop+카운터 증가 여부 확인
+
 ---
 
 ## 8. 테스트 Best Practices

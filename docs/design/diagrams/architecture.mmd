@@ -1,0 +1,81 @@
+%% Forge Architecture Overview (Mermaid)
+graph TB
+    subgraph Application[Application Layer]
+        AppCmd[GenerationCommand]
+        ConfigLoader[ConfigurationLoader]
+        Progress[ProgressReporter]
+    end
+
+    subgraph Orchestration[Orchestration Layer]
+        Session[SessionManager]
+        Scenario[ScenarioManager]
+        EnvCoord[EnvironmentCoordinator]
+        GenCtrl[GenerationController]
+        PipeCoord[PipelineCoordinator]
+    end
+
+    subgraph Gateway[Simulation Gateway]
+        GatewayNode[ISimulationGateway\n(InProcess/Remote)]
+    end
+
+    subgraph Simulation[Simulation Layer]
+        EnvSvc[EnvironmentService]
+        CamSvc[CameraService]
+        CrowdSvc[CrowdService]
+        Behavior[BehaviorSystem]
+        TimeWeather[TimeWeatherService]
+        Visibility[VisibilityService]
+    end
+
+    subgraph Pipeline[Data Pipeline Layer]
+        Bus[FrameBus]
+        Capture[CaptureWorker]
+        Detection[DetectionWorker]
+        Tracking[TrackingWorker]
+        Occlusion[OcclusionWorker]
+        Assembler[LabelAssembler]
+        Encode[EncodeWorker]
+        Storage[StorageWorker]
+        Export[Export Workers]
+    end
+
+    subgraph Services[Supporting Services]
+        Validation[ValidationService]
+        Stats[StatsService]
+        Manifest[ManifestService]
+    end
+
+    AppCmd --> ConfigLoader
+    AppCmd --> Session
+    ConfigLoader --> Session
+
+    Session --> Scenario
+    Session --> GenCtrl
+    Scenario --> EnvCoord
+    GenCtrl --> GatewayNode
+    GatewayNode --> EnvSvc
+    GatewayNode --> CamSvc
+    GatewayNode --> CrowdSvc
+    GatewayNode --> Behavior
+    GatewayNode --> TimeWeather
+    GatewayNode --> Visibility
+
+    GenCtrl --> Bus
+    Bus --> Capture
+    Capture --> Detection
+    Detection --> Tracking
+    Tracking --> Occlusion
+    Tracking --> Assembler
+    Occlusion --> Assembler
+    Assembler --> Encode
+    Encode --> Storage
+    Encode -.-> Export
+
+    Session --> PipeCoord
+    PipeCoord -.monitor.-> Capture
+    PipeCoord -.monitor.-> Detection
+    PipeCoord -.monitor.-> Storage
+
+    Session --> Validation
+    Session --> Stats
+    Session --> Manifest

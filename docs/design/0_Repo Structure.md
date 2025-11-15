@@ -15,11 +15,14 @@ forge/
 │       ├── 3_Class_Design_Document.md
 │       ├── 4_Data_Pipeline_Specification.md
 │       ├── 5_API Specification.md
-│       └── diagrams/              # planned
-│           ├── architecture.png   # planned
-│           ├── pipeline.png       # planned
-│           ├── class-diagram.png  # planned
-│           └── sequence/          # planned
+│       ├── diagrams/
+│       │   ├── architecture.mmd
+│       │   ├── pipeline.mmd
+│       │   ├── class-diagram.mmd
+│       │   └── sequence.mmd
+│       └── summaries/
+│           ├── 3_Class_Design_Summary.md
+│           └── 4_Data_Pipeline_Summary.md
 │
 ├── unity/                              # Unity Simulation Layer 프로젝트
 │   ├── Assets/

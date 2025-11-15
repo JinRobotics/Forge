@@ -1,0 +1,59 @@
+%% High-level Class Relationships
+classDiagram
+    class GenerationCommand {
+        +Execute(sessionConfig)
+    }
+
+    class SessionManager {
+        +StartSession(config)
+        +Pause()
+        +Resume()
+        +Stop()
+    }
+
+    class ScenarioManager {
+        +BuildScenarios(config)
+        +GetNext()
+    }
+
+    class GenerationController {
+        +RunFrameLoop()
+        -ISimulationGateway gateway
+        -FrameBus frameBus
+    }
+
+    class PipelineCoordinator {
+        +StartWorkers()
+        +HandleBackpressure()
+    }
+
+    class FrameBus {
+        +EnqueueRaw()
+        +Subscribe(worker)
+    }
+
+    class CaptureWorker {
+        +Capture(camera)
+    }
+
+    class LabelAssembler {
+        +AssembleAsync(frameId)
+    }
+
+    class EncodeWorker {
+        +Encode(labeledFrame)
+    }
+
+    class StorageWorker {
+        +Persist(encodedFrame)
+    }
+
+    GenerationCommand --> SessionManager
+    SessionManager --> ScenarioManager
+    SessionManager --> GenerationController
+    GenerationController --> PipelineCoordinator
+    GenerationController --> FrameBus
+    FrameBus --> CaptureWorker
+    CaptureWorker --> LabelAssembler
+    LabelAssembler --> EncodeWorker
+    EncodeWorker --> StorageWorker
