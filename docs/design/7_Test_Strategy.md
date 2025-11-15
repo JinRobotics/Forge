@@ -88,7 +88,7 @@ public void CreateSession_DuplicateSessionId_ThrowsException()
 - [ ] SessionManager: Create/Start/Stop
 - [ ] FrameContext: ID 생성 로직
 - [ ] CaptureWorker: 이미지 캡처 모의 테스트
-- [ ] DetectionWorker: bbox 생성 로직
+- [ ] AnnotationWorker: bbox 생성 로직
 - [ ] TrackingWorker: track ID 할당
 - [ ] StorageWorker: 파일 쓰기
 - [ ] config 저장 시 민감 필드(API Key/토큰/사용자 경로) 필터링/마스킹 확인
@@ -155,7 +155,7 @@ public async Task Pipeline_FullFlow_GeneratesValidOutput()
 ```
 
 **Phase 1 필수 테스트**:
-- [ ] FrameBus → CaptureWorker → DetectionWorker 흐름
+- [ ] FrameBus → CaptureWorker → AnnotationWorker 흐름
 - [ ] Session 전체 라이프사이클 (Init → Run → Stop)
 - [ ] Scene 전환 시 카메라 재설정
 - [ ] Validation/Stats/Manifest 생성
@@ -304,7 +304,7 @@ tests/
 │   │   └── PipelineCoordinatorTests.cs
 │   ├── DataPipeline/
 │   │   ├── CaptureWorkerTests.cs
-│   │   ├── DetectionWorkerTests.cs
+│   │   ├── AnnotationWorkerTests.cs
 │   │   ├── TrackingWorkerTests.cs
 │   │   └── StorageWorkerTests.cs
 │   └── Services/
@@ -435,6 +435,30 @@ jobs:
 - Unit/Integration: 최대 10MB
 - E2E: 최대 100MB
 - Performance: 최대 1GB
+
+### 6.3 Fixture 디렉터리 예시
+
+```
+tests/fixtures/
+├── configs/
+│   ├── basic.json
+│   ├── multiscene.json
+│   └── robotics_phase4.json
+├── images/
+│   ├── sample_10_frames.zip   # Git LFS
+│   └── camera_intrinsics.json
+├── labels/
+│   ├── golden_basic.json
+│   └── golden_multiscene.json
+├── models/
+│   └── yolo_tiny_test.onnx    # 5MB 이하, 필요 시 LFS
+└── remote/
+    └── manifest.json          # 대형 Asset 다운로드 위치
+```
+
+- `images/sample_10_frames.zip` 처럼 5MB 이상 파일은 Git LFS를 사용하고, CI는 `git lfs pull` 단계에서 가져온다.
+- `remote/manifest.json`은 Unity Scene, 대형 모델 등 원격 아티팩트 URL/Checksum을 정의하며, `tests/scripts/download_remote_assets.py`가 참조한다.
+- Fixture 업데이트 시 `tests/fixtures/README.md`에 출처·용도·라이선스를 기록한다.
 
 ---
 
@@ -721,7 +745,7 @@ public async Task PipelineCoordinator_CheckBackPressure_SlowsGeneration()
 | 계층 | 테스트 방법 | 실행 환경 | 예시 |
 |------|------------|----------|------|
 | **Orchestration Layer** | 단위 테스트 (Moq) | CLI (.NET) | GenerationController, PipelineCoordinator |
-| **DataPipeline** | 단위 테스트 (실제 데이터) | CLI (.NET) | CaptureWorker, DetectionWorker |
+| **DataPipeline** | 단위 테스트 (실제 데이터) | CLI (.NET) | CaptureWorker, AnnotationWorker |
 | **Data Models** | 단위 테스트 (순수 C#) | CLI (.NET) | FrameContext, TrackingData |
 | **Simulation Layer** | Unity Test Framework | Unity Editor | CrowdService, EnvironmentCoordinator |
 | **통합** | E2E (Headless Unity) | CLI + Unity | 전체 파이프라인 |
@@ -867,11 +891,11 @@ public static class FixtureBuilder
 **사용 예시**:
 ```csharp
 [Fact]
-public void DetectionWorker_ProcessFrame_ReturnsDetections()
+public void AnnotationWorker_ProcessFrame_ReturnsDetections()
 {
     // Arrange
     var mockImage = FixtureBuilder.CreateMockImage();
-    var worker = new DetectionWorker();
+    var worker = new AnnotationWorker();
 
     // Act
     var detections = worker.ProcessFrame(mockImage);
@@ -927,7 +951,26 @@ tests/
 
 ---
 
-## 11. 참고 자료
+## 11. Mutation Testing (고급)
+
+- **도구**: [Stryker.NET](https://stryker-mutator.io/)을 사용해 C# 코드의 Mutation Score 측정.
+- **범위**: DataPipeline(Capture/Detection/Tracking/Encode) 및 Orchestration SessionManager. Unity 의존 코드(InProcess MonoBehaviour)는 대상에서 제외.
+- **목표**: 핵심 프로젝트 Mutation Score ≥ 70%, 임계 모듈(PipelineCoordinator, ValidationService) ≥ 80%.
+- **실행 예시**
+  ```bash
+  dotnet tool restore
+  dotnet stryker \
+    --project src/Application/Application.csproj \
+    --reporter "dashboard" \
+    --file-pattern "src/DataPipeline/**/*.cs" \
+    --baseline-file build/reports/mutation-baseline.json
+  ```
+- **CI 통합**: Nightly 빌드에서 Mutation 테스트를 실행하고, Score가 목표 미만이면 `mutation-check` job이 실패하도록 한다. `stryker-config.json`에서 제외 파일, timeout, threshold를 명시한다.
+- **결과 활용**: Score가 낮은 파일은 우선순위 테스트 작성 대상으로 분류하고, PR 템플릿에 Mutation 영향 여부 체크박스를 추가한다.
+
+---
+
+## 12. 참고 자료
 
 - [xUnit Documentation](https://xunit.net/)
 - [Moq Documentation](https://github.com/moq/moq4)

@@ -38,6 +38,7 @@ Config에서 `simulation.gateway.mode=remote` 혹은 `distributed`를 설정하�
   - 네트워크 타임아웃/5xx 응답 시 지수 백오프(초기 1초, 최대 5회)로 재시도
   - 4xx는 클라이언트 오류로 간주하고 즉시 사용자에게 전파
 - **버전 호환**:
+  - 모든 REST 경로는 `/api/v{major}/...` 형태로 노출되며, 현재 기본은 `/api/v1/`이다.
   - 서버는 `X-Engine-Version` 헤더로 현재 엔진 버전 명시
   - 클라이언트는 `Accept-Version: v1` 형태로 원하는 API 버전 요청 가능
   - Major 버전이 다르면 426 Upgrade Required를 반환하고 `/status`에서 지원 버전 목록 노출
@@ -74,11 +75,14 @@ Config에서 `simulation.gateway.mode=remote` 혹은 `distributed`를 설정하�
 
 | Method & Path             | 설명                         | 주요 파라미터                                     | 성공 응답                     | 비고                               |
 | ------------------------- | -------------------------- | ------------------------------------------- | ------------------------- | ---------------------------------- |
+| `POST /scene-assets/upload` | 사용자 Scene Asset 업로드/검증 (Phase 2+) | `sceneName`, `assetType`, `metadata`, 바이너리 업로드 | `{status:"accepted"}` | 대용량 업로드, 인증/권한 필수, 비동기 처리 |
+| `GET /scene-assets/{scene}/status` | 업로드 검증 상태 조회 | `scene` | `{status:"ready", ...}` | 실패 시 오류/경고 포함 |
 | `POST /session/init`      | Scene Pool 및 리소스 초기화       | `sessionId`, `scenePool[]`, `engineVersion`, `authMode` | `{status:"success"}`      | Scene 캐시 구축 및 버전 호환성 검사 |
 | `POST /session/start`     | 프레임 루프 시작                  | `SessionConfig` 전체                          | `{status:"success"}`      | 시작 전 `init` 필수, 인증 필요        |
 | `POST /session/stop`      | 세션 중단/리소스 해제               | 없음                                          | `{status:"success"}`      | 비정상 종료 시에도 호출, 재시도 가능     |
 | `POST /scenario/activate` | 런타임 Scene/환경 전환 (Phase 2+) | `sceneName`, `timeWeather`, `randomization` | `{status:"success"}`      | Scene 전환 완료 후 응답, 버전 체크 포함  |
 | `GET /status`             | 실행 상태 확인                   | 쿼리 없음                                       | `{status:"running", ...}` | 모니터링/Progress UI, 인증 옵션 선택    |
+| `GET /session/{id}/stream` | 실시간 진행률 SSE (Phase 2+)     | `id` (sessionId)                               | `text/event-stream`       | 1초 간격 progress/FPS/event push       |
 
 #### `POST /session/init`
 
@@ -185,6 +189,42 @@ Config에서 `simulation.gateway.mode=remote` 혹은 `distributed`를 설정하�
 CLI/SDK 구성 시:
 - `dotnet run -- --api-key <KEY>` 형식으로 API Key를 전달하거나,
 - 환경 변수 `FORGE_API_KEY` / `FORGE_BEARER`를 설정하면 자동으로 `X-Api-Key` 또는 `Authorization` 헤더에 주입되도록 한다.
+
+#### `GET /session/{id}/stream` (Server-Sent Events, Phase 2+)
+
+- **Endpoint**: `/api/v1/session/{sessionId}/stream`
+- **Headers**: `Accept: text/event-stream`, 인증 헤더 필수
+- **용도**: 진행률/FPS/경고 이벤트를 1초 주기로 Push. WebSocket 없이 CLI/대시보드에서 실시간 정보 수신.
+- **이벤트 포맷**
+  ```
+  event: progress
+  data: {"timestamp":"2025-03-01T10:00:00Z","frame":45210,"fps":18.4,"queueDepth":{"capture":0.3,"encode":0.6}}
+
+  event: warning
+  data: {"code":"QUEUE_BACKPRESSURE","level":"warn","message":"Capture queue 95%"}
+
+  event: heartbeat
+  data: {}
+  ```
+- **규칙**
+  - 최소 1초마다 `progress` 또는 `heartbeat` 이벤트 전송
+- `Last-Event-ID`를 지원해 재연결 시 손실 최소화
+- 세션 종료 시 `event: completed` 전송 후 스트림 종료
+- 인증 실패/세션 없음: 즉시 401/404 후 종료
+
+### 3.4 Rate Limiting & Throttling
+
+| Endpoint | 제한(기본) | 정책 |
+|----------|-----------|------|
+| `POST /session/init` | 10 req/min per API key | 재시도는 429 응답 `Retry-After` 헤더 참조 |
+| `POST /session/start` | 6 req/min per session namespace | 중복 실행 방지 |
+| `GET /status` | 60 req/min per client IP | UI polling용 |
+| `GET /session/{id}/stream` | SSE 1 concurrent per session | 다중 스트림 시 기존 연결 종료 |
+| `/scene-assets/*` | 2 concurrent uploads, 5 req/min | 대용량 업로드 보호 |
+
+- Rate Limit 위반 시 429 + `Retry-After` 헤더를 반환한다.
+- 분산 배포 시 Redis Token Bucket 기반 중앙 제한을 적용하고, 로그에 `rateLimitId`를 남긴다.
+- 관리자는 `config/rate_limit.json`으로 제한치를 재정의할 수 있다.
 구체적인 설정 방법은 CLI 도움말(`--help`)과 동일하게 유지한다.
 
 ### 3.4 Distributed 모드 확장 API (Master ↔ Worker)
@@ -329,12 +369,38 @@ Config 예시:
 },
 "randomization": {
   "enabled": true,
-  "brightnessRange": [0.8, 1.2],
-  "colorTemperatureRange": [4000, 8000],
-  "cameraNoiseLevel": 0.05,
-  "weatherPool": ["clear", "rainy"]
+  "lighting": {
+    "brightness": {"distribution": "normal", "min": 0.2, "max": 1.8},
+    "colorTemperature": {"min": 2700, "max": 6500},
+    "sunAngleOffsetDeg": {"min": -30, "max": 30}
+  },
+  "color": {
+    "saturation": {"min": 0.7, "max": 1.3},
+    "contrast": {"min": 0.8, "max": 1.2},
+    "gamma": {"min": 0.9, "max": 1.1}
+  },
+  "camera": {
+    "gaussianNoise": {"sigma": {"min": 0.01, "max": 0.05}},
+    "motionBlur": {"maxPixels": 5},
+    "rollingShutter": {"percent": 5}
+  },
+  "weather": {
+    "rain": {
+      "intensity": {"min": 0, "max": 0.8},
+      "particleSizeMm": {"min": 0.5, "max": 3}
+    },
+    "fog": {
+      "density": {"min": 0, "max": 0.5},
+      "distanceMeters": {"min": 10, "max": 50}
+    }
+  }
 }
 ```
+
+- `distribution`: `uniform | normal` (기본 `uniform`)
+- 각 `min/max`는 Phase 2 기본 범위이며 Config Validation에서 범위를 벗어나면 오류를 반환한다.
+- `rollingShutter.percent`는 스캔 라인 지연 비율(+/-)을 의미하며, 5는 ±5% 왜곡을 뜻한다.
+- `weather` 블록은 옵션이며 Phase 2+에서만 활성화된다.
 
 ### 4.6 Output 섹션
 
@@ -355,11 +421,12 @@ Config 예시:
 "pipeline": {
   "workerConcurrency": {
     "capture": 1,
-    "detection": 2,
+    "annotation": 2,
     "encode": 2
   },
   "queueSize": {
     "capture": 512,
+    "annotation": 512,
     "encode": 2048
   },
   "checkpoint": { "enabled": true, "intervalFrames": 1000 }
@@ -463,3 +530,53 @@ Config의 `output.labelChannels[]` 배열을 통해 어떤 선택 채널이 활�
     metadata.json
   ```
 - **Manifest/Stats**: `meta/` 폴더에서 SessionConfig 요약, validation 결과 제공
+#### `POST /scene-assets/upload` (Phase 2+)
+
+- **Purpose**: 사용자 지정 Scene Asset(.fbx/.obj/.unitypackage/AssetBundle 등)을 업로드하고 검증 파이프라인에 등록한다.
+- **Authentication**: API Key + Role(`scene_admin`) 필요. 업로드 10GB 이하 제한, chunked 전송 권장.
+- **Request (multipart/form-data)**  
+  - `metadata` (JSON): 필수 메타데이터
+    ```json
+    {
+      "sceneName": "Warehouse_Custom_01",
+      "assetType": "assetbundle",
+      "coordinateSystem": "UnityYUp",
+      "unitScale": 1.0,
+      "navMeshAvailable": true,
+      "lightingPresets": ["day", "night"],
+      "collisionLayers": ["Default", "Obstacle"],
+      "notes": "Imported from CAD OBJ"
+    }
+    ```
+  - `file` (binary): Asset 본문 (AssetBundle/zip 등)
+- **Response 202**
+  ```json
+  {
+    "status": "accepted",
+    "scene": "Warehouse_Custom_01",
+    "uploadId": "upl_20250301_001",
+    "message": "Asset queued for validation."
+  }
+  ```
+- **Response 400/422**: 메타데이터 누락, 지원하지 않는 포맷, 용량 초과 등
+
+#### `GET /scene-assets/{scene}/status`
+
+- **Purpose**: 업로드/검증 진행 상태를 조회하고 성공 시 Scene Pool 등록 여부를 확인한다.
+- **Response 200**
+  ```json
+  {
+    "scene": "Warehouse_Custom_01",
+    "status": "ready",
+    "validationReport": {
+      "filesChecked": 42,
+      "navMesh": "ok",
+      "lighting": "warning",
+      "warnings": ["Missing light probe group"],
+      "errors": []
+    },
+    "registeredAt": "2025-03-01T08:12:00Z"
+  }
+  ```
+- `status` 값: `pending`, `validating`, `ready`, `failed`
+- `failed` 시 `errors[]`에 구체 원인 제공, 재업로드 가이드 포함

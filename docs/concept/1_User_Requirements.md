@@ -18,6 +18,17 @@
 
 ## 3. 사용자 요구사항 (User Requirements)
 
+### 3.0 우선순위 (MoSCoW)
+
+| Priority | 포함 UR | 비고 |
+|----------|---------|------|
+| **Must** | UR-01, UR-02, UR-05, UR-07, UR-13 | Phase 1 필수 |
+| **Should** | UR-09, UR-11, UR-12 | Phase 2 필수에 준함 |
+| **Could** | UR-15, UR-23 | 상황에 따라 선택 |
+| **Won't (이번 Phase)** | UR-41~UR-43 | Phase 4 Robotics 범위 |
+
+우선순위는 릴리즈 Scope/타임라인 조정 기준으로 사용한다.
+
 ### UR-01. Scene 다양성
 시스템은 **최소 1개 이상의 Scene**(Factory)을 제공해야 한다.  
 Phase 2 이후에는 **최소 3개 Scene**을 제공해야 하며,  
@@ -34,6 +45,13 @@ Phase 2 이후에는 **최소 3개 Scene**을 제공해야 하며,
 - 출력 포맷(JPG/PNG)
 - 카메라 고유 ID
 - 카메라는 고정형 또는 이동형(로봇)으로 구성할 수 있으며, 이동형 카메라는 경로(waypoints)/속도/센서 노이즈(rolling shutter, motion blur)/시간 가변 extrinsic을 Config에서 정의해야 한다.
+
+---
+
+### UR-02-1. 사용자 정의 Scene Asset 등록 (Phase 2+)
+사용자는 Unity 호환 Scene/환경 Asset(예: `.fbx`, `.obj`, `.unitypackage`, AssetBundle)을 업로드하여 Scene Pool에 추가할 수 있어야 한다.  
+- 등록 시 필수 메타데이터(좌표계, 단위, NavMesh 여부, 조명 프리셋, 충돌 레이어)를 JSON Manifest로 제공한다.  
+- 시스템은 Asset 검증(포맷, 파일 크기, 누락 리소스) 후 Scene 목록에 반영하고, Config에서 기존 Scene과 동일하게 선택할 수 있어야 한다.
 
 ---
 
@@ -89,11 +107,46 @@ Phase 1에서는 필수 아님.
 ---
 
 ### UR-09. Domain Randomization (Phase 2+)
-사용자는 다음 항목을 세기/범위 기반으로 제어할 수 있어야 한다:
-- 조명 (밝기/색온도)  
-- 색감 (채도/대비/감마)  
-- 카메라 노이즈 (Gaussian 등)  
-- 날씨 효과 (비/안개 등)
+사용자는 다음 항목을 세기/범위 기반으로 제어할 수 있어야 하며, 기본 제공 파라미터 범위는 아래를 따른다:
+
+| 항목 | 서브 파라미터 | 범위/설명 |
+|------|---------------|-----------|
+| 조명(Lighting) | 밝기 | 0.2~1.8, 기본 분포 Normal(µ=1.0, σ=0.2) |
+|  | 색온도 | 2700K~6500K |
+|  | 방향성 조명 각도 | 기본 각도 대비 ±30° |
+| 색감(Color) | 채도 | 0.7~1.3 |
+|  | 대비 | 0.8~1.2 |
+|  | 감마 | 0.9~1.1 |
+| 카메라 노이즈 | Gaussian σ | 0.01~0.05 |
+|  | Motion Blur | 0~5 픽셀 |
+|  | Rolling Shutter | ±5% 왜곡 |
+| 날씨 효과(Phase 2+) | 비 강도 | 0~0.8 |
+|  | 비 입자 크기 | 0.5~3mm |
+|  | 안개 밀도 | 0~0.5 |
+|  | 안개 거리 | 10~50m |
+
+Config 예시:
+
+```json
+"randomization": {
+  "lighting": {
+    "brightness": {"distribution": "normal", "min": 0.2, "max": 1.8},
+    "colorTemperature": {"min": 2700, "max": 6500}
+  },
+  "color": {
+    "saturation": {"min": 0.7, "max": 1.3},
+    "contrast": {"min": 0.8, "max": 1.2}
+  },
+  "camera": {
+    "gaussianNoise": {"sigma": {"min": 0.01, "max": 0.05}},
+    "motionBlur": {"maxPixels": 5}
+  },
+  "weather": {
+    "rain": {"intensity": {"min": 0, "max": 0.8}},
+    "fog": {"density": {"min": 0, "max": 0.5}}
+  }
+}
+```
 
 Phase 1에서는 기본 조명만 제공하면 된다.
 

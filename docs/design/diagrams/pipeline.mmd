@@ -1,8 +1,8 @@
 %% Forge Data Pipeline (Mermaid)
 graph LR
     Capture[CaptureWorker\n(Unity -> Raw Frame)] --> Queue1((RawQueue))
-    Queue1 --> Detection[DetectionWorker]
-    Detection --> Queue2((DetectionQueue))
+    Queue1 --> Detection[AnnotationWorker]
+    Detection --> Queue2((AnnotationQueue))
     Queue2 --> Tracking[TrackingWorker]
     Tracking --> Queue3((TrackingQueue))
     Queue3 --> Occlusion[OcclusionWorker]

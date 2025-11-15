@@ -135,9 +135,9 @@ classDiagram
         +OnCaptured: Event~RawImageData[]~
     }
 
-    class DetectionWorker {
-        +ProcessJob(job: RawImageData[]) void
-        +OnDetected: Event~DetectionData~
+    class AnnotationWorker {
+        +ProcessJob(job: FrameAnnotationJob) void
+        +OnAnnotated: Event~DetectionData~
     }
 
     class TrackingWorker {
@@ -177,17 +177,17 @@ classDiagram
     WorkerBase ..|> IWorker : implements
     WorkerBase ..|> IWorkerMonitor : implements
     CaptureWorker --|> WorkerBase : extends
-    DetectionWorker --|> WorkerBase : extends
+    AnnotationWorker --|> WorkerBase : extends
     TrackingWorker --|> WorkerBase : extends
     StorageWorker --|> WorkerBase : extends
     EdgeExportWorker --|> WorkerBase : extends
 
     FrameBus --> CaptureWorker : sends to
-    CaptureWorker --> DetectionWorker : sends to
-    DetectionWorker --> TrackingWorker : sends to
+    CaptureWorker --> AnnotationWorker : sends to
+    AnnotationWorker --> TrackingWorker : sends to
     EncodeWorker --> EdgeExportWorker : publishes to
     EdgeExportWorker --> EdgeExportService : notifies
-    RawImageData --> DetectionWorker : input
+    RawImageData --> AnnotationWorker : input
     TrackingData --> StorageWorker : output
 ```
 
@@ -1785,34 +1785,39 @@ class CaptureWorker : WorkerBase<FrameCaptureJob> {
     }
 }
 
-// DetectionWorker - Using 패턴으로 자동 반환
-class DetectionWorker : WorkerBase<RawImageData[]> {
-    protected override void ProcessJob(RawImageData[] images) {
-        // Using 패턴: 스코프 종료 시 자동으로 Dispose 호출
-        using var imageScope = new DisposableScope(images);
-
+// AnnotationWorker - GT → bbox 투영
+class AnnotationWorker : WorkerBase<FrameAnnotationJob> {
+    protected override void ProcessJob(FrameAnnotationJob job) {
         try {
-            // Detection 수행 (ReadOnly Span 사용으로 안전)
-            var detections = RunDetection(images);
-            OnDetected?.Invoke(detections);
+            var detections = Project(job.FrameContext, job.Images);
+            OnAnnotated?.Invoke(detections);
         }
         catch (Exception ex) {
-            _logger.LogError($"Detection failed: {ex.Message}");
+            _logger.LogError($"Annotation failed: {ex.Message}");
             throw;
         }
-        // ← 여기서 자동으로 모든 RawImageData.Dispose() 호출
+        finally {
+            // 이미지 버퍼는 DisposableScope에서 자동 반환
+            job.Dispose();
+        }
     }
 
-    private DetectionData RunDetection(RawImageData[] images) {
+    private DetectionData Project(FrameContext frame, RawImageData[] images) {
         var allDetections = new List<DetectionRecord>();
 
-        foreach (var image in images) {
-            // Span 사용으로 복사 없이 안전한 읽기
-            var pixels = image.Pixels; // ReadOnlySpan<byte>
+        foreach (var camera in images) {
+            foreach (var person in frame.PersonStates) {
+                var bbox = _projectionService.Project(person, camera.CameraMeta);
+                if (!bbox.IsValid) continue;
 
-            // ML 모델 추론 (Span 기반 API 사용)
-            var detections = _detectionModel.Infer(pixels, image.Width, image.Height);
-            allDetections.AddRange(detections);
+                allDetections.Add(new DetectionRecord {
+                    CameraId = camera.CameraId,
+                    FrameId = frame.FrameId,
+                    BoundingBox = bbox.Rectangle,
+                    Confidence = person.Visibility,
+                    GlobalPersonId = person.GlobalPersonId
+                });
+            }
         }
 
         return new DetectionData { Detections = allDetections };
@@ -1842,8 +1847,8 @@ class DisposableScope : IDisposable {
 | **1. Rent** | CaptureWorker | `ArrayPool.Rent()` | - |
 | **2. Wrap** | CaptureWorker | `new RawImageData(pixels, isPooled=true)` | - |
 | **3. Pass** | FrameBus → Pipeline | 참조 전달 (복사 없음) | - |
-| **4. Use** | DetectionWorker | `ReadOnlySpan` 사용 (안전) | - |
-| **5. Dispose** | DetectionWorker | `using` 블록 종료 시 자동 호출 | **여기서 Return** |
+| **4. Use** | AnnotationWorker | `ReadOnlySpan` 사용 (안전) | - |
+| **5. Dispose** | AnnotationWorker | `using` 블록 종료 시 자동 호출 | **여기서 Return** |
 
 **안전성 보장:**
 
@@ -1861,17 +1866,23 @@ class DisposableScope : IDisposable {
 
 ---
 
-### 7.3 DetectionWorker
+### 7.3 AnnotationWorker
+
+역할:
+- Unity Simulation Layer에서 전달된 `FrameContext.PersonStates` 정보를 카메라별 2D bbox/visibility로 변환한다.
+- 실제 ML Inference 없이 GT 기반 수학 변환만 수행하며, DetectionData를 downstream Stage에서 사용하기 좋은 포맷으로 정렬한다.
 
 입력:
-- RawImageData[]
+- RawImageData[] (해상도/카메라 ID/Intrinsic 확인)
+- FrameContext (PersonState/Visibility/GlobalID)
 
 출력:
-- DetectionData
+- DetectionData (bbox, confidence, visibility, globalId)
 
 주요 메서드:
-- void Enqueue(RawImageData[] images)
-- event OnDetected(DetectionData result)
+- void Enqueue(FrameAnnotationJob job) // RawImage 참조 + FrameContext
+- event OnAnnotated(DetectionData result)
+- BoundingBox ProjectToPixels(PersonState person, CameraMetadata camera)
 
 ---
 

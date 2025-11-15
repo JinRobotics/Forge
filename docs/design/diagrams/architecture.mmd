@@ -30,7 +30,7 @@ graph TB
     subgraph Pipeline[Data Pipeline Layer]
         Bus[FrameBus]
         Capture[CaptureWorker]
-        Detection[DetectionWorker]
+        Detection[AnnotationWorker]
         Tracking[TrackingWorker]
         Occlusion[OcclusionWorker]
         Assembler[LabelAssembler]

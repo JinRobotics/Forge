@@ -55,7 +55,7 @@ graph TB
     subgraph Pipeline["Data Pipeline Layer"]
         Bus[FrameBus]
         Capture[CaptureWorker]
-        Detection[DetectionWorker]
+        Detection[AnnotationWorker]
         Tracking[TrackingWorker]
         Occlusion[OcclusionWorker]
         Assembler[LabelAssembler]
@@ -475,6 +475,10 @@ public record CameraPose(
 - Scene Pool 관리 (Scene 로딩/활성화/비활성화)
 - 활성 Scene의 메타데이터 제공:
   - Scene 이름, 좌표계, NavMesh 영역 등
+- 사용자 정의 Scene Asset 등록:
+  - `SceneAssetRegistry`가 업로드된 `.fbx/.obj/.unitypackage/AssetBundle`을 검증·변환하여 Unity Addressables/AssetBundle로 등록
+  - Manifest 기준 좌표계/단위/NavMesh/조명 데이터를 `SceneMetadataStore`에 기록
+  - 등록 실패 시 Diagnostics 이벤트 발행 및 사용자에게 피드백
 
 #### 3.3.2 CameraService
 
@@ -652,17 +656,18 @@ sequenceDiagram
 역할:  
 - SimulationLayer에서 전달된 FrameContext + 카메라 이미지에 대해
   라벨 생성, 인코딩, 저장, 검증까지 수행하는 병렬 파이프라인
+- AnnotationWorker는 Unity에서 전달된 GT를 카메라별 라벨 포맷으로 변환하는 전용 Stage로 구성되어 있으며, 필요 시 별도 모델 Stage를 추가해 비교/검증할 수 있다.
 
 핵심 개념:  
 - **FrameBus**: Frame 이벤트 전달 허브  
 - **Raw → Labeled → Encoded** 3단 데이터 모델  
-- **Worker 분리**: Capture / Detection / Tracking / ReID / Occlusion / Encode / Storage
+- **Worker 분리**: Capture / Annotation / Tracking / ReID / Occlusion / Encode / Storage
 
 주요 컴포넌트:
 
 - `FrameBus`
 - `CaptureWorker`
-- `DetectionWorker`
+- `AnnotationWorker`
 - `TrackingWorker`
 - `ReIDWorker`
 - `OcclusionWorker` (Phase 2+)
@@ -695,12 +700,19 @@ sequenceDiagram
   - Phase 1: 동기 캡처 (간단 구현)
   - Phase 2+: 비동기 캡처 + Worker Queue
 
-#### 3.4.3 DetectionWorker
+#### 3.4.3 AnnotationWorker
 
 - 역할:
-  - 각 이미지에 대해 Bounding box + confidence 생성
-- 입력: `RawImageData[]`
-- 출력: `DetectionData` 리스트 (camera_id, person candidate별 bbox/score)
+  - Unity Simulation Layer에서 전달한 PersonState/Visibility 정보를 카메라별 bbox/score로 투영해 DetectionData를 생성
+  - 실제 신경망 추론을 수행하지 않으며, 모든 라벨은 GT 기반 계산
+- 입력:
+  - `RawImageData[]` (이미지 크기/카메라 메타 확인용)
+  - `FrameContext` (PersonState, Global ID, Visibility)
+- 출력: `DetectionData` 리스트 (camera_id별 bbox/visibility/confidence)
+- 내부 로직:
+  - 카메라 intrinsic/extrinsic과 인물 3D 좌표를 이용해 2D bbox 계산
+  - VisibilityService가 계산한 occlusion 값을 DetectionData에 포함
+  - 이미지 경계 밖 bbox는 clip/drop 정책에 따라 처리
 
 #### 3.4.4 TrackingWorker
 
@@ -832,7 +844,7 @@ sequenceDiagram
    - FrameContext + 활성 카메라 정보를 파이프라인으로 전달
 
 5. **Data Pipeline Layer**
-   - CaptureWorker → DetectionWorker → TrackingWorker → ReIDWorker → OcclusionWorker → LabelAssembler → EncodeWorker → StorageWorker
+   - CaptureWorker → AnnotationWorker → TrackingWorker → ReIDWorker → OcclusionWorker → LabelAssembler → EncodeWorker → StorageWorker
    - 세션 종료 후 Validation/Stats/Manifest 실행
 
 6. **Application Layer**
@@ -917,7 +929,7 @@ async Task<bool> ExecuteWithRetry<T>(Func<Task<T>> operation, RetryPolicy policy
 | Stage | MaxAttempts | InitialDelay | BackoffMultiplier | MaxDelay | 실패 시 동작 |
 |-------|-------------|--------------|-------------------|----------|------------|
 | **CaptureWorker** | 3 | 100ms | 2.0 | 5s | Frame skip |
-| **DetectionWorker** | 2 | 50ms | 1.5 | 2s | 빈 Detection 반환 |
+| **AnnotationWorker** | 2 | 50ms | 1.5 | 2s | 빈 Detection 반환 |
 | **TrackingWorker** | 1 (재시도 없음) | - | - | - | 이전 상태 유지 |
 | **StorageWorker** | 5 | 200ms | 2.0 | 10s | 세션 중단 |
 | **EncodeWorker** | 3 | 100ms | 2.0 | 5s | Frame skip |

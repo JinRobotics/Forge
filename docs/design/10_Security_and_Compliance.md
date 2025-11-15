@@ -175,10 +175,17 @@ manifest.GeneratedBy = $"User_{hashedId.Substring(0, 8)}";
 
 - Test Strategy에 `SecurityChecks` job을 추가하여 다음을 검증한다:
   - ConfigSanitizer가 API Key/토큰/사용자 경로를 마스킹했는지 (`tests/unit/Application/ConfigurationLoaderTests`에 `ConfigSanitizer_SensitiveFieldsMasked` 추가).
-  - `/status` 계약 테스트가 Role 기반 접근을 강제하는지 (`tests/integration/StatusEndpointTests`에서 viewer Role로 POST 차단을 검증).
-  - RBAC 정책이 누락되지 않았는지 (`dotnet test tests/security`에서 허용되지 않은 조합 호출 시 403 기대).
-  - 암호화 플래그가 활성화된 세션에서 `config_json`가 평문으로 저장되지 않는지 (`tests/integration/EncryptedConfigTests`).
+- `/status` 계약 테스트가 Role 기반 접근을 강제하는지 (`tests/integration/StatusEndpointTests`에서 viewer Role로 POST 차단을 검증).
+- RBAC 정책이 누락되지 않았는지 (`dotnet test tests/security`에서 허용되지 않은 조합 호출 시 403 기대).
+- 암호화 플래그가 활성화된 세션에서 `config_json`가 평문으로 저장되지 않는지 (`tests/integration/EncryptedConfigTests`).
 - GitHub Actions `pr.yml`에 `security-policy` job을 추가하고, 실패 시 `Security policy violation` 코멘트로 merge를 차단한다.
+
+### 4.4 Scene Asset 업로드 보안
+- **스토리지 구획**: 사용자 업로드 자산은 `assets/custom_scenes/` 하위의 `pending/`, `ready/`, `quarantine/` 디렉터리를 사용해 물리적으로 격리하고, 경로는 Config(`assetStorage.root`)로 재정의할 수 있다.
+- **안티멀웨어 검사**: 업로드 직후 ClamAV 등 안티멀웨어 엔진과 Unity 호환성 검사(허용 확장자, NavMesh/조명 메타데이터 필수, 압축폭탄 탐지)를 실행하고, 실패 시 파일을 `quarantine/`으로 이동하며 사용자에게 재업로드 가이드를 제공한다.
+- **리소스 제한**: 단일 업로드는 기본 10GB 이하, 파일 개수 10,000개 이하로 제한하고, 압축 해제 후 크기 검사/시간 제한으로 DoS를 방지한다.
+- **권한 분리**: 검증/변환 Worker는 최소 권한 OS 계정으로 실행하며, 검증 완료 전까지 Scene Pool이나 Unity Runtime에서 해당 Asset을 로드하지 않는다.
+- **감사 기록**: `scene_asset_audit.log`에 업로더, 파일 해시(SHA-256), 검사 결과, 격리 사유를 기록해 포렌식 추적이 가능하도록 한다.
 
 ---
 

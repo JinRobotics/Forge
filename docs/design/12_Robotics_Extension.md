@@ -3,9 +3,7 @@
 
 **Phase 4의 목표**:
 
-> 기존 Forge가 제공하는 **CCTV + Mobile RGB 중심 합성 데이터 엔진**을
-> **로봇용 센서 Ground Truth (LiDAR, IMU, Wheel Odometry, Depth, Trajectory/SLAM GT)** 까지 확장해,
-> "Full Robotics Perception Dataset Generator"로 업그레이드한다.
+> 기존 Forge가 제공하는 **CCTV + Mobile RGB 중심 합성 데이터 엔진**을 **로봇용 센서 Ground Truth (LiDAR, IMU, Wheel Odometry, Depth, Trajectory/SLAM GT)** 까지 확장해, "Full Robotics Perception Dataset Generator"로 업그레이드한다.
 
 ### 핵심 가치
 

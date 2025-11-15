@@ -8,9 +8,10 @@
 - ID 정책(frame_id, camera_id, global_person_id 등)을 명시한다.
 - 디렉터리/파일명/manifest 구조를 정의한다.
 - 성능/안정성/운영 관점에서 구현 시 반드시 지켜야 할 규칙을 제공한다.
+- Forge는 Unity Simulation Layer가 제공하는 GT를 그대로 라벨 포맷으로 투영하는 파이프라인이며, Annotation Stage가 이 역할을 담당한다. (별도 모델 비교가 필요하면 추가 Stage로 확장)
 
 대상 범위:
-- FrameBus → Capture → Detection → Tracking → ReID → Occlusion → LabelAssembler → Encode → Storage → Edge Export → Validation/Stats/Manifest
+- FrameBus → Capture → Annotation → Tracking → ReID → Occlusion → LabelAssembler → Encode → Storage → Edge Export → Validation/Stats/Manifest
 
 ---
 
@@ -39,9 +40,9 @@
 | 객체 타입 | 생성자 | 초기 소유자 | 이전 경로 | 최종 소비자 | 해제 시점 |
 |----------|--------|------------|-----------|------------|----------|
 | `FrameContext` | GenerationController | FrameBus | CaptureWorker | CaptureWorker | Capture 완료 후 즉시 |
-| `RawImageData` | CaptureWorker | DetectionWorker | TrackingWorker | DetectionWorker | Detection 완료 후 |
+| `RawImageData` | CaptureWorker | AnnotationWorker | TrackingWorker | AnnotationWorker | Annotation 완료 후 |
 | `byte[] pixels` | CaptureWorker (Pool) | RawImageData | EncodeWorker | EncodeWorker | Encode 완료 후 Return |
-| `DetectionData` | DetectionWorker | TrackingWorker | LabelAssembler | TrackingWorker | Tracking 완료 후 |
+| `DetectionData` | AnnotationWorker | TrackingWorker | LabelAssembler | TrackingWorker | Tracking 완료 후 |
 | `TrackingData` | TrackingWorker | LabelAssembler | - | LabelAssembler | Assembly 완료 후 |
 | `OcclusionData` | OcclusionWorker | LabelAssembler | - | LabelAssembler | Assembly 완료 후 |
 | `LabeledFrame` | LabelAssembler | EncodeWorker | StorageWorker | EncodeWorker | Encode 완료 후 |
@@ -124,18 +125,15 @@ public class FramePipelineContext
 }
 
 // 각 Stage는 자신의 필드만 set (Idempotent Write)
-public class DetectionWorker
+public class AnnotationWorker
 {
     public void Process(FramePipelineContext context)
     {
-        // Detection 수행
-        var detections = DetectPersons(context.Images);
+        // GT → bbox 투영
+        var detections = ProjectPersons(context.Frame, context.Images);
 
-        // 한 번만 set
         context.Detection = detections;
-        context.StageStatuses["Detection"] = StageStatus.Completed;
-
-        // 이후 read-only로 취급
+        context.StageStatuses["Annotation"] = StageStatus.Completed;
     }
 }
 ```
@@ -187,7 +185,7 @@ public void Pipeline_LongRunning_NoMemoryLeak()
 |-------|-------------|-----------|--------------|
 | FrameBus | 10 KB | 512 | ~5 MB |
 | CaptureWorker | 8 MB (1080p RGBA) | 512 | ~4 GB |
-| DetectionWorker | 100 KB | 512 | ~50 MB |
+| AnnotationWorker | 100 KB | 512 | ~50 MB |
 | TrackingWorker | 50 KB | 2048 | ~100 MB |
 | LabelAssembler | 200 KB | 2048 | ~400 MB |
 | EncodeWorker | 500 KB (JPEG) | 2048 | ~1 GB |
@@ -207,13 +205,89 @@ public void Pipeline_LongRunning_NoMemoryLeak()
 - AsyncGPUReadback 사용하여 GPU → CPU 복사 지연
 - ArrayPool 사용으로 할당 빈도 감소
 
+#### 2.0.7 Stage 간 데이터 구조
+
+각 Stage는 공통 DTO를 사용하여 데이터를 교환한다. DTO는 `src/DataPipeline/DataModel/`에 정의한다.
+
+```csharp
+public readonly struct FrameData {
+    public int FrameId { get; init; }
+    public DateTime Timestamp { get; init; }
+    public byte[] ImageData { get; init; }      // ArrayPool 버퍼
+    public IntPtr? GpuHandle { get; init; }     // Zero-Copy 모드에서만 사용
+    public CameraMetadata Camera { get; init; }
+}
+
+public readonly struct DetectionResult {
+    public int FrameId { get; init; }
+    public BoundingBox[] Boxes { get; init; }
+    public float[] Confidences { get; init; }
+    public AnnotationMetadata Metadata { get; init; }
+}
+
+public readonly struct TrackingResult {
+    public int FrameId { get; init; }
+    public Tracklet[] Tracklets { get; init; }
+    public Pose[] CameraPoses { get; init; }
+}
+
+public readonly struct LabeledFrame {
+    public int FrameId { get; init; }
+    public FrameData Frame { get; init; }
+    public DetectionResult Detection { get; init; }
+    public TrackingResult Tracking { get; init; }
+    public OcclusionData Occlusion { get; init; }
+}
+
+public readonly struct EncodedFrame {
+    public int FrameId { get; init; }
+    public string CameraId { get; init; }
+    public string RelativePath { get; init; }
+    public ReadOnlyMemory<byte> Payload { get; init; }
+}
+```
+
+- 모든 DTO는 불변(immutable)로 유지해 Stage 간 참조/동시성 문제를 방지한다.
+- `CameraMetadata`, `AnnotationMetadata` 등 서브 타입 정의는 Class Design 문서 §5.5를 따른다.
+- 테스트에서는 `tests/fixtures/FrameDataFactory` 헬퍼로 샘플 DTO를 생성해 서로 다른 Stage를 단위 테스트한다.
+
+#### 2.0.8 Backpressure 정책
+
+Capture→Encode 파이프라인은 고정 큐 크기와 품질 정책에 따라 Backpressure를 처리한다.
+
+| Stage Queue | 기본 크기 | 경고 임계치 | 조치 |
+|-------------|---------|-------------|------|
+| CaptureQueue | 1024 | 75% | Frame 생성 지연 (`Task.Delay(BACKPRESSURE_DELAY)`) |
+| AnnotationQueue | 512 | 80% | Worker 증설 신호 (`ScaleOutRequested`) |
+| EncodeQueue | 2048 | 85% | 품질 모드 `relaxed`일 때 Frame Drop + 경고 |
+
+```csharp
+if (_captureQueue.Count >= MAX_QUEUE_DEPTH)
+{
+    _logger.LogWarning("CaptureQueue backpressure: {Usage:P0}", Usage);
+
+    if (_qualityMode == QualityMode.Strict)
+    {
+        await _pipelineCoordinator.RequestPauseAsync("capture_backpressure");
+        return;
+    }
+
+    await Task.Delay(BACKPRESSURE_DELAY, cancellationToken);
+}
+```
+
+- `BACKPRESSURE_DELAY` 기본값 50ms, Config(`pipeline.backpressure.delayMs`)로 조정.
+- `QualityMode.Strict`: Drop 금지, `PipelineCoordinator`가 세션을 `paused` 상태로 전환.
+- `QualityMode.Relaxed`: Drop 허용, DiagnosticsService가 `QUEUE_BACKPRESSURE` 경고를 기록하고 `/session/{id}/stream`에 전송.
+- Backpressure 이벤트는 `diagnostic_event.jsonl`과 Prometheus(`forge_queue_usage`)에 동시에 기록한다.
+
 ---
 
 ### 2.1 단계(Stage)
 
 1. Frame Dispatch (FrameBus)
 2. Capture Stage (CaptureWorker)
-3. Detection Stage (DetectionWorker)
+3. Annotation Stage (AnnotationWorker)
 4. Tracking Stage (TrackingWorker)
 5. Occlusion Stage (OcclusionWorker, Phase 2+)
 6. Label Assembly Stage (LabelAssembler)
@@ -296,7 +370,7 @@ sequenceDiagram
     participant Sim as Simulation<br/>Layer
     participant Bus as FrameBus
     participant Capture as Capture<br/>Worker
-    participant Detection as Detection<br/>Worker
+    participant Detection as Annotation<br/>Worker
     participant Tracking as Tracking<br/>Worker
     participant Storage as Storage<br/>Worker
     participant PipeCoord as Pipeline<br/>Coordinator
@@ -327,11 +401,11 @@ sequenceDiagram
                 Capture->>Sim: ReadPixels(camera)
                 Sim-->>Capture: pixels
                 Capture->>Capture: create RawImageData
-                Capture->>Detection: enqueue RawImageData
+                Capture->>Detection: enqueue FrameAnnotationJob
                 deactivate Capture
 
                 activate Detection
-                Detection->>Detection: run person detection
+                Detection->>Detection: project GT → bbox
                 Detection->>Detection: create DetectionData
                 Detection->>Tracking: enqueue DetectionData
                 deactivate Detection
@@ -596,58 +670,51 @@ Queue:
 
 ---
 
-### 4.3 Detection Stage – DetectionWorker
+### 4.3 Annotation Stage – AnnotationWorker
 
 역할:
-- RawImageData에 대해 사람 bbox + confidence 생성.
+- Unity Simulation Layer가 제공하는 GT(PersonState, Skeleton, Visibility)를 카메라별 bbox/score 형식으로 변환해 DetectionData를 생성한다.
+- 계산 과정은 투영/클리핑/가시성 보정 등 기하학 연산으로 구성된다.
 
 Input:
-- RawImageData[]
+- RawImageData[] (해상도/카메라 메타 확인용)
+- FrameContext (PersonState, Global ID, Visibility 정보 포함)
 
 Output:
-- DetectionData (frame_id, camera_id별 detection 리스트)
+- DetectionData (frame_id, camera_id별 bbox/score 리스트)
 
 Queue:
-- 입력 큐: `Queue<RawImageData[]>`
+- 입력 큐: `Queue<FrameAnnotationJob>` (RawImageData 참조 + FrameContext)
 - 기본 큐 크기: 512
-- 큐 풀 시:
-  - CaptureWorker로 back-pressure: 더 이상 enqueue하지 않고 대기.
+- 큐 풀 시 CaptureWorker에 back-pressure 신호 전달
+
+`FrameAnnotationJob` 구조:
+- `FrameContext frame`
+- `RawImageData[] images`
+- `IDisposable Dispose()` → 포함된 이미지 버퍼를 한 번에 반환
 
 동시성:
-- DetectionWorker Thread: 1~N (configurable)
-- Stage 내부에서 batch 처리 가능 (예: 여러 frame을 한 번에 inference).
+- AnnotationWorker Thread: 1~N (configurable)
+- Stage 내부 연산은 CPU 기반 수학 변환(프로젝션, 클리핑)으로 구성되어 배치 처리가 필요 없음
 
 순서:
 - Frame별 독립 처리. 순서 유지 필요 없음.
 
+구현 알고리즘:
+1. FrameContext.PersonStates를 순회하여 GlobalPersonId, 3D 위치, Bounding Capsule 정보를 확인한다.
+2. 각 카메라의 intrinsic/extrinsic을 사용해 3D 좌표를 2D 픽셀 bbox로 투영한다.
+3. `VisibilityService`가 제공한 Occlusion/Visibility 값을 DetectionData.confidence로 매핑하거나 별도 필드에 기록한다.
+4. 이미지 경계를 벗어난 bbox는 클리핑/제거 정책(`annotation.clipMode`)에 따라 처리한다.
+
 에러 처리:
-- 모델 inference 실패:
-  - 해당 frame에 대해 detection 없음으로 처리 (빈 리스트)
-  - 경고 로그
-- 반복 실패 시(모든 frame detection 실패 지속) 세션 중단 가능.
+- FrameContext 누락/손상 시 빈 DetectionData 반환 + 경고
+- 카메라 메타데이터 불일치 시 해당 카메라 결과만 skip하고 Manifest 품질 지표에 반영
 
 성능 목표:
-- 1080p 기준 카메라 N개 합산 FPS가 전체 목표 FPS(예: 5~15 FPS)에 걸리지 않도록 모델/설정 선택.
+- 카메라 수 6, 1080p 기준 Frame당 Annotation 처리 시간 1ms 이하 유지
 
-#### 4.3-A Inference Engine Integration (GPU/CPU 경계)
-
-- DetectionWorker는 `IInferenceRunner` 추상화를 통해 ONNX Runtime, TensorRT, TorchScript 등 다양한 엔진을 플러그인 방식으로 사용한다.
-- 기본 배치 전략:
-  1. CaptureWorker가 ArrayPool 버퍼를 채운 RawImageData를 DetectionWorker 큐에 push
-  2. DetectionWorker는 `IImagePreprocessor`가 GPU 텍스처/CPU 메모리 전환을 담당하도록 위임
-  3. `IInferenceRunner.RunAsync(Span<byte> batchTensor, InferenceContext ctx)` 호출 시 GPU 스트림 ID와 batch 크기를 명시
-  4. GPU 결과는 `DetectionParser`가 즉시 CPU 구조체로 변환하여 다음 Stage에 전달
-- GPU/CPU 간 메모리 전환 규칙:
-  - AsyncGPUReadback 사용 시 GPU→CPU 복사는 Capture 단계에서 완료하고 DetectionWorker는 CPU 메모리만 읽는다.
-  - TensorRT/Torch RT 등의 GPU Inference를 사용할 경우 RawImageData를 GPU 텍스처로 재업로드하지 않도록, Capture 단계에서 GPU native handle을 함께 제공하는 옵션(`RawImageData.GpuHandle`)을 두고 DetectionWorker가 선택적으로 활용한다.
-- Thread/Stream 설계:
-  - `DetectionWorker`는 CPU 측 Stage지만, 내부에서 GPU 스트림을 사용해 비동기 실행.
-  - `detection.inference.concurrentStreams` 설정으로 GPU 스트림 수를 제어하여 AsyncGPUReadback, TrackingWorker와 경합을 피한다.
-- 장애/핫스왑:
-  - `IInferenceRunnerHealthCheck`가 주기적으로 성능/오류율을 MetricsEmitter에 기록하고, 임계치 초과 시 fallback 엔진(예: CPU)으로 스위칭한다.
-  - 스위칭 이벤트는 DiagnosticsService에 `type="inference_failover"`로 기록하고 Manifest `quality.inferenceFallbackCount`에 누적한다.
-- 문서 연계:
-  - GPU/Inference 구성 파라미터는 `SessionConfig.detection.inference` 섹션에 정의하고 ConfigSchemaRegistry에서 검증한다.
+비고:
+- 추가적인 비교/검증 로직은 별도 Optional Stage로 확장할 수 있다.
 
 ---
 
@@ -1128,7 +1195,7 @@ Output:
 ### 5.2 Queue 임계값 예시
 
 - CaptureQueue: 512
-- DetectionQueue: 512
+- AnnotationQueue: 512
 - TrackingQueue: 2048
 - OcclusionQueue: 1024
 - LabelAssemblyQueue: 2048
@@ -1255,9 +1322,9 @@ ProgressReporter로 전달되는 정보:
 | Stage | Failure / Drop 조건 | Downstream 영향 | Manifest / Metrics 업데이트 |
 |-------|--------------------|-----------------|-----------------------------|
 | FrameBus | Queue overflow, Publish 실패 | Frame drop, GenerationController가 BackPressureLevel 상승 → IFrameRatePolicy가 Skip/Pause | `metrics.frame.dropped_total++`, `manifest.quality.frameDropCount`, Diagnostics `event=framebus_drop` |
-| Capture | 특정 camera capture 실패 (N회) | 해당 camera RawImage 누락, DetectionWorker는 빈 입력으로 처리 | `StageStatuses["Capture"]=Partial`, `manifest.quality.cameras[].missingFrames`, `metrics.capture.partial_total` |
+| Capture | 특정 camera capture 실패 (N회) | 해당 camera RawImage 누락, AnnotationWorker는 빈 입력으로 처리 | `StageStatuses["Capture"]=Partial`, `manifest.quality.cameras[].missingFrames`, `metrics.capture.partial_total` |
 | Capture | 모든 camera 실패 | frame skip, Join 단계까지 전달 안 됨 | Diagnostics severity=Error, `manifest.quality.frameDropByCapture++` |
-| Detection | Inference 오류/timeout | DetectionData 빈 리스트 → TrackingWorker가 이전 상태 유지 | `StageStatuses["Detection"]=Failed`, `manifest.quality.stageFailures.detection++`, `metrics.detection.failures_total` |
+| Annotation | GT 투영 오류/메타데이터 불일치 | DetectionData 빈 리스트 → TrackingWorker가 이전 상태 유지 | `StageStatuses["Annotation"]=Failed`, `manifest.quality.stageFailures.annotation++`, `metrics.annotation.failures_total` |
 | Tracking | TrackingState 없음/유효성 실패 | LabelAssembler가 frame drop (strict) 또는 partial 라벨 (relaxed) | `manifest.quality.droppedByJoinTimeout` (LabelAssembler 기록), `StageStatuses["Tracking"]=Failed` |
 | Occlusion | Visibility 데이터 누락 | LabeledFrame에 occlusion 필드 미포함, 나머지 pipeline은 계속 | `manifest.quality.stageWarnings.occlusion++` |
 | LabelAssembler | Join timeout | strict: 세션 PAUSE, relaxed: frame drop | `metrics.label.dropped_by_join_timeout_total`, Diagnostics event, Manifest quality section에 누락 사유 기록 |
@@ -1271,7 +1338,7 @@ ProgressReporter로 전달되는 정보:
 
 - Zero-Copy 모드에서는 `FramePipelineContext.StageStatuses`를 LabelAssembler가 집계하여 `StageStatusSummary`(성공/실패/부분 성공 카운터)를 생성하고 Manifest `quality.stageStatusSummary`에 저장한다.
 - ValidationService는 StageStatuses를 입력 받아 다음을 수행한다:
-  - `CriticalStages = {Capture, Detection, Tracking, Storage}` 중 하나라도 Failed가 있으면 ValidationReport에 `FatalIssues`로 기록.
+- `CriticalStages = {Capture, Annotation, Tracking, Storage}` 중 하나라도 Failed가 있으면 ValidationReport에 `FatalIssues`로 기록.
   - Partial 상태(Occlusion, ReID 등)는 `Warnings`에 누적.
 - DiagnosticsService는 StageStatus 변화 이벤트(예: Failed→Recovered)를 감시하여 `/status` health를 조정한다. critical Stage가 연속 실패하면 HTTP 503으로 전환한다.
 - ProgressReporter는 StageStatuses/StageErrorFlags로부터 요약 문자열(예: `Tracking delayed (3 frames)`)을 생성해 CLI에 표시한다.
@@ -1291,7 +1358,7 @@ ProgressReporter로 전달되는 정보:
 |-------|-----------|-------------------------|-----------|------------------|
 | FrameBus | Publish/Consume latency | < 1ms | `metrics.framebus.latency_ms` 95p | Queue capacity 조정, lock contention 분석 |
 | Capture | GPU→CPU Readback 시간 | < 12ms/frame | `metrics.capture.readback_ms` | AsyncGPUReadback 병렬 수 조절, 해상도 하향 |
-| Detection | Inference latency per batch | < 25ms (YOLOv8n, batch=4) | `metrics.detection.inference_ms` 95p | 다른 모델/엔진 선택, batch 크기 조정 |
+| Annotation | Projection latency per frame | < 3ms | `metrics.annotation.projection_ms` 95p | 카메라/인원 수 조정, SIMD 최적화 |
 | Tracking | per frame 처리 | < 3ms | `metrics.tracking.process_ms` | 알고리즘 단순화, thread 수 확대 |
 | LabelAssembler | Join latency | < 5s timeout, 평균 < 200ms | `metrics.label.join_wait_ms` | `_joinTimeout` 조정, pending frame limit 확대 |
 | Encode | 이미지+라벨 인코딩 | < 10ms/frame | `metrics.encode.process_ms` | 압축률 조정, SIMD/Native encoder 사용 |

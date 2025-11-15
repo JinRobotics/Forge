@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "docs/design/12_Robotics_Extension.md",
+                "file": "docs/design/2_System_Architecture.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "12_Robotics_Extension"
+              "title": "2_System_Architecture"
             }
           }
         ]
@@ -185,6 +185,11 @@
   },
   "active": "9b4c60c5f9345aea",
   "lastOpenFiles": [
+    "assets/banner.png",
+    "assets/be2ee57d-bbf9-424c-8b41-6f3b3abe0816 (1) (1).png",
+    "docs/concept/1_User_Requirements.md",
+    "docs/concept/0_Concept_Document.md",
+    "docs/design/12_Robotics_Extension.md",
     "docs/design/11_Unity_Integration_Guide.md",
     "docs/design/10_Security_and_Compliance.md",
     "docs/design/9_Checkpoint_Mechanism.md",
@@ -196,11 +201,9 @@
     "docs/design/3_Class_Design_Document.md",
     "docs/design/2_System_Architecture.md",
     "docs/design/1_System_Requirements.md",
-    "docs/concept/1_User_Requirements.md",
-    "docs/concept/0_Concept_Document.md",
-    "docs/design/12_Robotics_Extension.md",
-    "docs/design/0_Repo Structure.md",
     "README.md",
+    "CLAUDE.md",
+    "docs/design/0_Repo Structure.md",
     "assets/logo.png",
     "assets/4e9f4133-ecde-4bb1-96c5-fb88bfeee198.png",
     "assets",
@@ -212,7 +215,6 @@
     "reference_repo/com.unity.perception/README.md",
     "reference_repo/SynthDet/README.md",
     "reference_repo/README.md",
-    "AGENTS.md",
     "reference_repo/SynthDet/docs/images/usimSumExecution.PNG",
     "reference_repo/SynthDet/docs/images/unity-wide.png",
     "reference_repo/SynthDet/docs/images/theaNotebook.PNG",
@@ -220,7 +222,6 @@
     "reference_repo/SynthDet/docs/images/runinusim.png",
     "reference_repo/SynthDet/docs/images/realImage.png",
     "reference_repo/SynthDet/docs/images/randomizers_collapsed.png",
-    "reference_repo/SynthDet/docs/images/qs-1.png",
     "reference_repo/SynthDet/docs/images",
     "reference_repo/SynthDet/docs/Synthetic Data pipeline.drawio",
     "reference_repo/SynthDet/docs",

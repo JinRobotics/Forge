@@ -685,7 +685,98 @@ public async Task<byte[]> CaptureImageAsync(Camera camera)
 
 ---
 
-## 8. Unity Scene 구조
+## 8. Unity 프로젝트 & Scene 구성
+
+### 8.0 Unity 프로젝트 구조 예시
+
+```
+Forge.Unity/
+├── Assets/
+│   ├── Scenes/
+│   │   ├── Factory/
+│   │   │   ├── Factory_Main.unity
+│   │   │   └── LightingSettings.asset
+│   │   ├── Office/
+│   │   └── Warehouse/
+│   ├── Scripts/
+│   │   ├── Simulation/
+│   │   └── Services/
+│   ├── Prefabs/
+│   ├── AddressableAssetsData/
+│   └── Resources/
+├── Packages/
+│   └── manifest.json
+└── ProjectSettings/
+    ├── GraphicsSettings.asset
+    └── InputManager.asset
+```
+
+#### 8.0.1 필수 패키지 및 버전
+
+| 패키지 | 목적 | 권장 버전 |
+|--------|------|-----------|
+| `com.unity.render-pipelines.universal` | URP 렌더링 | 14.x (Unity 2022 LTS) |
+| `com.unity.perception` | Synthetic 라벨링/랜덤화 | 1.0.0-pre.3 이상 |
+| `com.unity.addressables` | Asset 로딩/배포 | 1.21.x |
+| `com.unity.ai.navigation` | NavMesh 빌드/업데이트 | 1.1.x |
+| `com.unity.cinemachine` | 카메라 경로/트래킹 | 2.9.x |
+
+`Packages/manifest.json` 스니펫:
+
+```json
+{
+  "dependencies": {
+    "com.unity.render-pipelines.universal": "14.0.9",
+    "com.unity.perception": "1.0.0-pre.3",
+    "com.unity.addressables": "1.21.19",
+    "com.unity.ai.navigation": "1.1.4",
+    "com.unity.cinemachine": "2.9.7"
+  }
+}
+```
+
+#### 8.0.2 Scene 설정 체크리스트
+
+- [ ] Scene이 Build Settings에 등록되어 있는가?
+- [ ] Lighting Settings에서 Auto Generate 비활성화 후 `Generate Lighting` 실행
+- [ ] NavMesh Bake가 최신인지 (`Navigation` 창에서 확인)
+- [ ] Scene Root에 `AppEntrypoint`, `CameraService`, `CrowdService`, `EnvironmentService` 프리팹이 포함되어 있는가?
+- [ ] Addressable Label(`scene_factory`, `scene_office` 등)이 적용되었는가?
+- [ ] Scene Metadata ScriptableObject에 좌표계/단위/NavMesh 정보가 채워졌는가?
+
+체크리스트는 `SceneValidationEditorTests`로 자동화하는 것을 권장한다.
+
+#### 8.0.3 Perception Package 통합
+
+1. Package Manager에서 Perception 패키지를 설치한다.
+2. `Perception Camera` 컴포넌트를 카메라 프리팹에 붙이고 `BoundingBox3DLabeler`, `InstanceSegmentationLabeler` 등을 활성화한다.
+3. `LabelingConfiguration` ScriptableObject를 생성해 라벨 ID를 정의한다.
+4. `PerceptionDatasetWriter`를 `SimulationScenario`에 연결해 라벨 파일 출력 경로를 지정한다.
+5. Perception 이벤트를 Forge `FrameContext`로 변환하는 `PerceptionBridge` 스크립트를 추가한다.
+
+#### 8.0.4 Asset 관리 전략 (Addressables)
+
+- Scene/Prefabs/머티리얼을 Addressables로 등록해 Standalone/Headless 빌드에서 동일 버전 사용을 보장한다.
+- Addressables Profile을 `Editor`, `Standalone`, `Headless`로 분리하고 CI에서 `BuildScriptPackedMode`를 사용한다.
+- 사용자 업로드 Scene Asset은 `SceneAssetRegistry` Editor 툴로 Addressable Group에 자동 추가한다.
+
+#### 8.0.5 Build Pipeline 단계
+
+1. **PreBuild**: `SceneValidationEditorTests`, Addressable Analyze 실행
+2. **Addressables Build**: `AddressableAssetSettings.BuildPlayerContent()` 수행
+3. **Player Build**: `BuildPipeline.BuildPlayer`로 Standalone/Headless 빌드
+4. **PostBuild**: `BuildInfo.json`에 Perception Labeler/패키지 버전을 기록
+5. **Packaging**: 빌드 산출물 + Addressables Bundle을 `dist/forge-unity-{mode}.tar.gz`로 압축
+
+CI 예시:
+
+```bash
+unity-editor -quit -batchmode \
+  -projectPath Forge.Unity \
+  -executeMethod Forge.BuildScripts.BuildRemoteMode \
+  -customBuildPath Builds/remote/Linux64/ForgeUnity.x86_64 \
+  -logFile builds.log
+```
 
 ### 8.1 MainScene.unity
 

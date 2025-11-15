@@ -210,9 +210,9 @@ public class PipelineBenchmark
     }
 
     [Benchmark]
-    public void DetectionWorker_ProcessBatch()
+    public void AnnotationWorker_ProcessBatch()
     {
-        var worker = new DetectionWorker();
+        var worker = new AnnotationWorker();
         foreach (var img in _testImages)
         {
             worker.ProcessJob(img);
@@ -278,9 +278,9 @@ public class PerformanceLogger
 
 **출력 예시** (`perf.log`):
 ```
-frameId,fps,capture_ms,detection_ms,tracking_ms,storage_ms
-0,10.2,35.2,68.5,12.3,15.8
-1,10.5,34.8,67.2,11.9,16.2
+frameId,fps,capture_ms,annotation_ms,tracking_ms,storage_ms
+0,10.2,35.2,18.5,12.3,15.8
+1,10.5,34.8,17.2,11.9,16.2
 ...
 ```
 
@@ -298,14 +298,14 @@ frameId,fps,capture_ms,detection_ms,tracking_ms,storage_ms
 2. Pipeline Stage별 처리 시간 측정
    ```
    Capture: 35ms
-   Detection: 70ms  ← 병목!
+   Annotation: 8ms
    Tracking: 12ms
    Encode: 20ms
    Storage: 15ms
    ```
 
 3. Queue depth 확인
-   - Detection Queue가 계속 증가 → Detection Worker 추가 필요
+   - Annotation Queue가 계속 증가 → AnnotationWorker 스레드/최적화 필요
 
 **해결 방안**:
 - GPU 병목: 해상도 낮추기, LOD 적용
@@ -380,21 +380,26 @@ GPU Time: 60ms
 **Worker 병렬화**:
 ```csharp
 // Before (순차)
-foreach (var frame in frames)
+foreach (var job in annotationJobs)
 {
-    DetectPersons(frame);
+    ProjectToBbox(job);
 }
 
 // After (병렬)
-Parallel.ForEach(frames, new ParallelOptions { MaxDegreeOfParallelism = 4 },
-    frame => DetectPersons(frame));
+Parallel.ForEach(annotationJobs,
+    new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount },
+    job => ProjectToBbox(job));
 ```
 
-**Batch 처리**:
+**벡터화/Span 활용**:
 ```csharp
-// Detection을 batch로 처리 (GPU 효율 증가)
-var batch = queue.TakeBatch(batchSize: 8);
-var results = DetectionModel.Infer(batch); // GPU에서 한 번에 처리
+// GT 투영 시 SIMD(System.Numerics) 사용
+var personPositions = MemoryMarshal.Cast<float, Vector3>(personSpan);
+for (int i = 0; i < personPositions.Length; i++)
+{
+    var projected = camera.Project(personPositions[i]);
+    bboxes[i] = projected.ToBoundingBox();
+}
 ```
 
 **메모리 재사용**:
@@ -487,8 +492,8 @@ Baseline (2023-11-01):
 | GPU | <70% | 68% | ✅ PASS |
 
 **Bottleneck Analysis**:
-- Detection Worker: 70ms (병목)
-- Recommendation: Increase worker threads to 2
+- Annotation Worker: 12ms (정상)
+- Recommendation: n/a
 
 **Trend** (vs last week):
 - FPS: +5% ↑

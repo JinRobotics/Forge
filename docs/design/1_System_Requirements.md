@@ -1,8 +1,7 @@
 
 ## 1. 문서 목적
 
-본 문서는 Forge의 **기능적 요구사항(FR)** 과  
-**비기능적 요구사항(NFR)** 을 개발자 관점에서 정의한다.
+본 문서는 Forge의 **기능적 요구사항(FR)** 과  **비기능적 요구사항(NFR)** 을 개발자 관점에서 정의한다.
 
 - 상위 사용자 요구에서 정의된 WHAT을 기술적으로 실현하기 위한 REQUIREMENTS  
 - “HOW”는 Architecture/LDD/Pipeline Spec 문서에서 정의한다  
@@ -65,6 +64,13 @@ Scene 전환은 **Session 중간에 1회 이상** 발생할 수 있다.
 - 물리 좌표계 정보  
 - 충돌/경로 정보(NavMesh)  
 - 환경 정보(조명/시간대 등)
+
+---
+
+### **FR-03-1. 사용자 정의 Scene Asset 인입 (Phase 2+)**
+- 시스템은 사용자가 업로드한 Unity 호환 Scene Asset(.fbx/.obj/.unitypackage/AssetBundle 등)을 Scene Pool에 등록할 수 있어야 한다.
+- Asset 등록 시 메타데이터(JSON Manifest)를 검증하고, 좌표계/단위/NavMesh/조명/충돌 레이어 정보를 추출해 저장한다.
+- 검증된 Asset은 다른 기본 Scene과 동일한 방식으로 Config/Scenario에서 선택 가능해야 하며, 실패 시 원인과 수정 방법을 리포트해야 한다.
 
 ---
 
@@ -334,7 +340,8 @@ Robotics Extension 문서(`docs/design/12_Robotics_Extension.md`)에서 정의�
 ## 5.2 Reliability / Stability
 
 ### **NFR-04. 장시간 실행 안정성**
-시스템은 **12시간 이상** 연속 실행 시 중단 없이 작동해야 한다.
+- 시스템은 **12시간 이상** 연속 실행 시 중단 없이 작동해야 하며, 평균 고장 간격(MTBF)을 **24시간 이상**, Crash rate(세션 단위)를 **0.1% 이하**로 유지해야 한다.
+- 장시간 테스트 결과는 Performance Benchmarks 문서에 기록하고, 일정 기준을 충족하지 못하면 릴리즈 차단 사유가 된다.
 
 ### **NFR-05. Checkpoint/Restart**
 Session 도중 오류 발생 시 마지막 checkpoint 지점부터 재시작 가능해야 한다.(Phase 2+)
@@ -353,10 +360,19 @@ Scene/Camera/Crowd/Label/Pipeline은 모듈화되어  독립적으로 유지보�
 
 ## 5.4 Compatibility
 
-### **NFR-08. OS/GPU**
-- 최소: Windows 10 이상, Ubuntu 20.04 이상  
-- GPU: NVIDIA CUDA 기반 환경  
-- Unity 2021 LTS 이상
+### **NFR-08. OS/GPU/HW**
+- OS: Windows 10 이상, Ubuntu 20.04 이상
+- Unity 버전: 2021 LTS 이상
+- **최소 사양**
+  - CPU: 4코어 이상 (예: Intel i5 10th)
+  - RAM: 16GB
+  - GPU: NVIDIA RTX 2060 이상 (6GB VRAM)
+  - Disk: 500GB SSD
+- **권장 사양**
+  - CPU: 8코어 이상
+  - RAM: 32GB
+  - GPU: NVIDIA RTX 3080 이상 (10GB VRAM)
+  - Disk: 1TB NVMe SSD
 
 ---
 
@@ -377,6 +393,12 @@ Scene/Camera/Crowd/Label/Pipeline은 모듈화되어  독립적으로 유지보�
 - 로컬 전용 실행 시 localhost만 바인딩 (0.0.0.0 금지)
 - 분산 실행 시 mTLS 또는 API Key 필수
 - 기본 포트 8080 (변경 가능)
+- 보안 품질 기준: OWASP Top 10 취약점 없음(연 1회 이상 침투 테스트), 정적/동적 분석에서 Critical 이슈 0건
+
+### **NFR-16. Scene Asset 업로드 보안**
+- 사용자 업로드 Scene Asset은 기본적으로 `assets/custom_scenes/` 하위에 격리된 `pending/`, `ready/`, `quarantine/` 디렉터리로 분리 저장하며, 경로는 Config(`assetStorage.root`)로 재정의할 수 있다.
+- 업로드 직후 안티멀웨어/포맷 검증 파이프라인을 실행하여 허용 확장자(.fbx/.obj/.unitypackage/AssetBundle) 외 파일, 임베디드 스크립트, 과도한 용량(기본 10GB)을 즉시 차단해야 한다.
+- 검증/변환 작업은 제한된 권한의 Worker 계정에서 수행하고, 실패 자산은 `quarantine/`에 이동 후 30일 내 자동 삭제하며, 성공한 자산만 Scene Pool 및 Config 선택지로 노출한다.
 
 ### **NFR-13. 시간 모델 (Simulation Time)**
 - `FrameContext.timestamp`는 시뮬레이션 월드 시간(Scenario/TimeWeather 기준)을 사용한다.
