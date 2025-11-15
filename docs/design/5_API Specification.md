@@ -1,10 +1,10 @@
-CCTV Synthetic Data Generation Engine
+Forge
 
 ---
 
 ## 1. 문서 목적 (Purpose)
 
-본 문서는 CCTV Synthetic Data Generation Engine의 주요 API 명세를 정의한다.  
+본 문서는 Forge의 주요 API 명세를 정의한다.  
 API 계약을 명확히 함으로써 레이어 간 결합도를 낮추고 기능별 병행 개발, 테스트 자동화, 운영 모니터링을 가능하게 한다.
 
 ---
@@ -153,7 +153,7 @@ Config에서 `simulation.gateway.mode=os-process` 혹은 `distributed`를 설정
 
 CLI/SDK 구성 시:
 - `dotnet run -- --api-key <KEY>` 형식으로 API Key를 전달하거나,
-- 환경 변수 `CCTV_SIM_API_KEY` / `CCTV_SIM_BEARER`를 설정하면 자동으로 `X-Api-Key` 또는 `Authorization` 헤더에 주입되도록 한다.
+- 환경 변수 `FORGE_API_KEY` / `FORGE_BEARER`를 설정하면 자동으로 `X-Api-Key` 또는 `Authorization` 헤더에 주입되도록 한다.
 구체적인 설정 방법은 CLI 도움말(`--help`)과 동일하게 유지한다.
 
 ---
@@ -212,7 +212,7 @@ Config 예시:
   "port": 8080,
   "auth": {
     "type": "api-key",
-    "apiKeyEnv": "CCTV_SIM_API_KEY"
+    "apiKeyEnv": "FORGE_API_KEY"
   },
   "allowedHosts": ["127.0.0.1"]
 }

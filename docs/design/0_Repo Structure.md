@@ -1,7 +1,7 @@
 본 문서는 **최종적으로 목표하는 레포지토리 구조**를 설명한다.
 
 ```
-cctv-synthetic-data-engine/
+forge/
 │
 ├── docs/                               # 모든 문서 (v2)
 │   ├── README.md

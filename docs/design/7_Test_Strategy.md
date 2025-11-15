@@ -1,4 +1,4 @@
-# CCTV Synthetic Data Generation Engine - Test Strategy
+# Forge - Test Strategy
 
 > **문서 버전:** v1.0 (2025-02-14)  
 > **변경 이력:**  
@@ -6,7 +6,7 @@
 
 ## 1. 목적
 
-본 문서는 CCTV Synthetic Data Generation Engine의 테스트 전략을 정의한다.
+본 문서는 Forge의 테스트 전략을 정의한다.
 
 - 품질 목표 설정
 - 테스트 레벨 정의 (단위/통합/E2E/성능)

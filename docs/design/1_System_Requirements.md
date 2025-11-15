@@ -1,4 +1,4 @@
-CCTV Synthetic Data Generation Engine
+Forge
 
 ---
 
@@ -9,7 +9,7 @@ CCTV Synthetic Data Generation Engine
 
 ## 1. 문서 목적
 
-본 문서는 CCTV Synthetic Data Generation Engine의 **기능적 요구사항(FR)** 과  
+본 문서는 Forge의 **기능적 요구사항(FR)** 과  
 **비기능적 요구사항(NFR)** 을 개발자 관점에서 정의한다.
 
 - **UR(사용자 요구)** 에서 정의된 WHAT을 기술적으로 실현하기 위한 REQUIREMENTS  

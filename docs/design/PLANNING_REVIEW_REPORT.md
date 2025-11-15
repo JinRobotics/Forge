@@ -10,7 +10,7 @@
 
 ## 1. 개요
 
-본 보고서는 SynCCTV 프로젝트의 기획 문서(Concept, User Requirements, System Requirements)를 종합 검토하여
+본 보고서는 Forge 프로젝트의 기획 문서(Concept, User Requirements, System Requirements)를 종합 검토하여
 **문서 간 일관성**, **요구사항 추적성**, **설계 문서와의 정합성**을 평가한다.
 
 ---

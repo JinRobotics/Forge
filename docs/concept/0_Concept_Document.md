@@ -1,11 +1,11 @@
-CCTV Synthetic Data Generation Engine (CCTV Synthetic Data Factory)
+Forge
 
 ---
 
 ## 1. Overview
 
 본 프로젝트는 실제 CCTV 환경에서 수집·라벨링하기 어려운 **대규모, 고품질, 정밀 라벨 합성 데이터**를
-자동으로 생성하는 **CCTV 특화 Synthetic Data Generation Engine**(이하 “엔진”)을 구축하는 것을 목표로 한다.
+자동으로 생성하는 **Forge**(이하 “엔진”)을 구축하는 것을 목표로 한다.
 
 생성 데이터의 주요 타겟 Task:
 
@@ -16,7 +16,7 @@ CCTV Synthetic Data Generation Engine (CCTV Synthetic Data Factory)
 - Crowd behavior analysis
 - 감염병 동선 추적, 안전/보안 감시, Edge NPU 모델 검증
 
-엔진은 **“CCTV Synthetic Data Factory”** 로 동작하며,
+엔진은 **“Forge”** 로 동작하며,
 사용자가 구성한 시나리오에 따라 다양한 환경·카메라·군중·랜덤화를 제어하며
 반복 가능하고 재현 가능한 방식으로 dataset을 생산한다.
 

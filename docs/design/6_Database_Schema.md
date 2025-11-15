@@ -8,7 +8,7 @@
 
 ## 1. 목적 (Purpose)
 
-본 문서는 CCTV Synthetic Data Generation Engine의 **데이터베이스 스키마**를 정의한다.
+본 문서는 Forge의 **데이터베이스 스키마**를 정의한다.
 
 **필요성:**
 1. **Session 메타데이터 관리**: 파일 기반만으로 부족한 검색/필터링 요구사항
@@ -668,6 +668,16 @@ public class SessionRepository {
     }
 }
 ```
+
+### 6.2 Migration/Repository 지침 (Phase 3)
+- 초기 마이그레이션 스크립트가 `worker_node`, `worker_heartbeat`, `job_queue` 테이블을 포함해야 분산 모드가 동작한다.
+- Repository 시그니처 예:
+  - `WorkerNodeRepository.Register(workerId, capabilities)`
+  - `WorkerNodeRepository.UpdateStatus(workerId, status, currentLoad)`
+  - `JobQueueRepository.Enqueue(sessionId, startFrame, endFrame, type)`
+  - `JobQueueRepository.MarkPending(jobId)` (장애 시 재할당)
+  - `HeartbeatRepository.Insert(workerId, cpu, gpu, queueRatio)`
+- 분산 모드가 비활성화된 경우에도 마이그레이션은 항상 실행하되, API/서비스 레이어에서 기능을 비활성화한다.
 
 ---
 

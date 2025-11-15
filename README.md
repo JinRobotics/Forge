@@ -1,4 +1,4 @@
-# SynCCTV
+# Forge
 
 Synthetic CCTV Data Generation Engine - Unity 기반 합성 데이터 생성 시스템
 
@@ -22,7 +22,7 @@ Synthetic CCTV Data Generation Engine - Unity 기반 합성 데이터 생성 시
 ### 현재 디렉터리
 
 ```
-SynCCTV/
+forge/
 ├── docs/                 # 컨셉·요구사항·설계 문서
 │   ├── concept/
 │   │   ├── 0_Concept_Document.md
@@ -40,7 +40,7 @@ SynCCTV/
 ```
 
 - Unity Perception 분석 초안은 `reference_repo/docs_analysis/` 하위에 위치하며, 필요 시 `docs/analysis/`로 승격 예정이다.
-- `src/`는 현재 빈 폴더로, Phase 1 개발 시작 시 Orchestration/Simulation/Pipeline 코드가 추가될 예정이며 주요 네임스페이스는 `CCTVSim.Application`, `CCTVSim.Orchestration` 등으로 계획되어 있다.
+- `src/`는 현재 빈 폴더로, Phase 1 개발 시작 시 Orchestration/Simulation/Pipeline 코드가 추가될 예정이며 주요 네임스페이스는 `Forge.Application`, `Forge.Orchestration` 등으로 계획되어 있다.
 - `reference_repo/`에는 아래와 같은 외부 예제/패키지를 그대로 보관한다.
   - `SynthDet/`
   - `Unity-Robotics-Hub/`
@@ -66,14 +66,30 @@ SynCCTV/
    ```bash
    dotnet run --config pipeline/configs/session_example_factory.json
    ```
-   원격/보안 환경이면 `--api-key <KEY>` 또는 환경 변수 `CCTV_SIM_API_KEY` / `CCTV_SIM_BEARER`를 설정해 CLI가 자동으로 `X-Api-Key`/`Authorization` 헤더를 붙이도록 한다.
+   원격/보안 환경이면 `--api-key <KEY>` 또는 환경 변수 `FORGE_API_KEY` / `FORGE_BEARER`를 설정해 CLI가 자동으로 `X-Api-Key`/`Authorization` 헤더를 붙이도록 한다.
+   - Unity를 별도 프로세스로 띄우는 경우 config에 `simulationGateway`를 포함한다:
+   ```json
+   {
+     "sessionId": "session_factory_run_001",
+     "totalFrames": 100000,
+     "outputDirectory": "/data/output/session_factory_run_001",
+     "simulationGateway": {
+       "mode": "remote",
+       "host": "127.0.0.1",
+       "port": 8080,
+       "auth": { "type": "api-key", "apiKeyEnv": "FORGE_API_KEY" },
+       "allowedHosts": ["127.0.0.1"]
+     },
+     "...": "..."
+   }
+   ```
 4. **API 상태 점검 (선택)**  
    ```bash
    pipeline/scripts/status_smoke.sh
    ```  
-   `SIM_ENDPOINT`, `CCTV_SIM_API_KEY`, `CCTV_SIM_BEARER` 환경 변수를 설정하면 `/status` 응답의 `engineVersion`, `supportedVersions`, `authMode`를 확인할 수 있다.
+   `SIM_ENDPOINT`, `FORGE_API_KEY`, `FORGE_BEARER` 환경 변수를 설정하면 `/status` 응답의 `engineVersion`, `supportedVersions`, `authMode`를 확인할 수 있다.
 
-> GitHub Actions에서 주기적으로 상태를 점검하려면 `.github/workflows/status_smoke.yml`을 사용하고 동일한 값을 Secrets(`SIM_ENDPOINT`, `CCTV_SIM_API_KEY`, `CCTV_SIM_BEARER`)에 저장한다.
+> GitHub Actions에서 주기적으로 상태를 점검하려면 `.github/workflows/status_smoke.yml`을 사용하고 동일한 값을 Secrets(`SIM_ENDPOINT`, `FORGE_API_KEY`, `FORGE_BEARER`)에 저장한다.
 
 ### 2. 문서 읽기
 
@@ -138,6 +154,16 @@ reference_repo/docs_analysis/00_START_HERE.md
 - **Base Framework**: Unity Perception (customized)
 - **GPU**: NVIDIA RTX 3070+ (AsyncGPUReadback)
 - **Output**: JSON, YOLO, COCO, TFLite, ONNX
+
+### 결과물 디렉터리/manifest 개요
+- 기본 출력: `images/`, `labels/json|yolo|coco/`, `meta/manifest.json`
+- Edge Export(Phase 3+): `edge_packages/` 아래 `tflite/`, `onnx/`, `custom_binary/` 등 포맷별 디렉터리 생성
+- manifest 추가 필드 예시:
+```json
+"edgeArtifacts": [
+  {"format": "tflite-record", "path": "edge_packages/tflite/data.record", "checksum": "sha256:...", "status": "ready"}
+]
+```
 
 ---
 

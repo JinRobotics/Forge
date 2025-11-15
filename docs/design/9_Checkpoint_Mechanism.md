@@ -6,7 +6,7 @@
 
 ## 1. 목적
 
-CCTV Synthetic Data Generation Engine의 Checkpoint 및 복구 메커니즘을 정의한다.
+Forge의 Checkpoint 및 복구 메커니즘을 정의한다.
 
 **핵심 목표**:
 - 장시간 세션 중 예상치 못한 중단 발생 시 복구 가능
@@ -598,14 +598,14 @@ _logger.LogInformation("Resume complete: starting from frame {Frame}, {Remaining
 
 ```
 # Checkpoint 저장 성공/실패 카운트
-cctvsim_checkpoint_saves_total{status="success"} 5
-cctvsim_checkpoint_saves_total{status="failed"} 0
+forge_checkpoint_saves_total{status="success"} 5
+forge_checkpoint_saves_total{status="failed"} 0
 
 # Checkpoint 파일 크기
-cctvsim_checkpoint_file_size_bytes 1048576
+forge_checkpoint_file_size_bytes 1048576
 
 # 복구 시간
-cctvsim_checkpoint_resume_duration_seconds 2.5
+forge_checkpoint_resume_duration_seconds 2.5
 ```
 
 ---

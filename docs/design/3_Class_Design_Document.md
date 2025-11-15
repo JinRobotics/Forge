@@ -1,4 +1,4 @@
-CCTV Synthetic Data Generation Engine
+Forge
 
 ---
 
@@ -11,7 +11,7 @@ CCTV Synthetic Data Generation Engine
 ## 1. 문서 목적
 
 본 문서는 System Architecture v2를 기반으로  
-CCTV Synthetic Data Generation Engine의 **클래스 구조, 책임, 주요 메서드, 관계**를 정의한다.
+Forge의 **클래스 구조, 책임, 주요 메서드, 관계**를 정의한다.
 
 - 네임스페이스 단위로 클래스 그룹을 정의한다.
 - 각 클래스는 책임(Single Responsibility)에 따라 설계한다.
@@ -22,12 +22,12 @@ CCTV Synthetic Data Generation Engine의 **클래스 구조, 책임, 주요 메�
 
 ## 2. 네임스페이스 개요
 
-- CCTVSim.Application
-- CCTVSim.Orchestration
-- CCTVSim.Simulation
-- CCTVSim.DataPipeline
-- CCTVSim.DataModel
-- CCTVSim.Services
+- Forge.Application
+- Forge.Orchestration
+- Forge.Simulation
+- Forge.DataPipeline
+- Forge.DataModel
+- Forge.Services
 
 ### 클래스 다이어그램
 
@@ -202,7 +202,7 @@ classDiagram
 
 ---
 
-## 3. CCTVSim.Application
+## 3. Forge.Application
 
 ### 3.1 GenerationCommand
 
@@ -268,7 +268,7 @@ classDiagram
 
 ---
 
-## 4. CCTVSim.Orchestration
+## 4. Forge.Orchestration
 
 ### 4.1 SessionManager
 
@@ -746,7 +746,7 @@ class SessionFinalizationService : ISessionFinalizationService {
 
 ---
 
-## 5. CCTVSim.Simulation
+## 5. Forge.Simulation
 
 모든 클래스는 **Unity Main Thread**에서만 동작해야 한다.
 
@@ -918,11 +918,158 @@ public void MigrateToScene(string targetSceneName, NavMesh targetNavMesh)
 - void Update(float deltaTime)
 
 관계:
-- Domain Randomization이 적용된 파라미터를 반영.
+- RandomizationService에서 조명/날씨 파라미터 랜덤화 적용 (Phase 2+).
 
 ---
 
-### 5.6 VisibilityService (Phase 2+)
+### 5.6 RandomizationService (Phase 2+)
+
+역할:
+- Domain Randomization 파라미터를 시뮬레이션에 적용하여 Sim-to-Real Gap 감소
+
+주요 책임:
+- 조명 랜덤화 (밝기, 색온도)
+- 색감 랜덤화 (채도, 대비, 감마)
+- 카메라 노이즈 추가
+- 날씨 효과 (비, 안개)
+
+주요 메서드:
+- void Initialize(RandomizationConfig config)
+- void ApplyRandomization()  // 매 프레임 또는 주기적으로 호출
+- void Reset()  // Scene 전환 시 랜덤화 상태 초기화
+
+**RandomizationConfig 구조**:
+```csharp
+public class RandomizationConfig
+{
+    // 조명 랜덤화
+    public FloatRange BrightnessRange { get; set; } = new(0.8f, 1.2f);  // 0.8~1.2배
+    public FloatRange ColorTempRange { get; set; } = new(4000f, 7000f); // Kelvin
+
+    // 색감 랜덤화
+    public FloatRange SaturationRange { get; set; } = new(0.9f, 1.1f);
+    public FloatRange ContrastRange { get; set; } = new(0.95f, 1.05f);
+    public FloatRange GammaRange { get; set; } = new(0.9f, 1.1f);
+
+    // 카메라 노이즈
+    public NoiseConfig Noise { get; set; } = new NoiseConfig
+    {
+        Type = NoiseType.Gaussian,  // Gaussian, SaltPepper, Poisson
+        IntensityRange = new FloatRange(0.0f, 0.05f)  // 0~5%
+    };
+
+    // 날씨
+    public WeatherConfig Weather { get; set; } = new WeatherConfig
+    {
+        RainProbability = 0.1f,      // 10% 확률로 비
+        RainIntensityRange = new FloatRange(0.2f, 0.8f),
+        FogProbability = 0.15f,      // 15% 확률로 안개
+        FogDensityRange = new FloatRange(0.01f, 0.05f)
+    };
+
+    // 랜덤화 강도 (전체 on/off)
+    public RandomizationIntensity Intensity { get; set; } = RandomizationIntensity.Medium;
+}
+
+public enum RandomizationIntensity
+{
+    None,    // 랜덤화 비활성
+    Low,     // 범위 50% 축소
+    Medium,  // 설정된 범위 그대로
+    High     // 범위 150% 확대
+}
+```
+
+**구현 전략** (Unity Post-Processing Stack 기반):
+```csharp
+public class RandomizationService : MonoBehaviour
+{
+    private PostProcessVolume _globalVolume;
+    private RandomizationConfig _config;
+    private System.Random _random;
+
+    public void ApplyRandomization()
+    {
+        if (_config.Intensity == RandomizationIntensity.None) return;
+
+        // 1. 조명 랜덤화
+        float brightness = SampleRange(_config.BrightnessRange);
+        float colorTemp = SampleRange(_config.ColorTempRange);
+        ApplyLighting(brightness, colorTemp);
+
+        // 2. 색감 랜덤화 (Post-Processing ColorGrading)
+        if (_globalVolume.profile.TryGetSettings(out ColorGrading colorGrading))
+        {
+            colorGrading.saturation.value = SampleRange(_config.SaturationRange) * 100 - 100;
+            colorGrading.contrast.value = (SampleRange(_config.ContrastRange) - 1) * 100;
+            colorGrading.gamma.value = new Vector4(
+                SampleRange(_config.GammaRange),
+                SampleRange(_config.GammaRange),
+                SampleRange(_config.GammaRange),
+                1f
+            );
+        }
+
+        // 3. 카메라 노이즈 (Post-Processing Grain)
+        if (_globalVolume.profile.TryGetSettings(out Grain grain))
+        {
+            grain.intensity.value = SampleRange(_config.Noise.IntensityRange);
+            grain.size.value = 1.0f;  // Grain 크기 고정
+        }
+
+        // 4. 날씨 효과
+        ApplyWeather();
+    }
+
+    private void ApplyWeather()
+    {
+        // 비 효과
+        if (_random.NextDouble() < _config.Weather.RainProbability)
+        {
+            float intensity = SampleRange(_config.Weather.RainIntensityRange);
+            _rainParticleSystem.emission.rateOverTime = intensity * 1000;
+            _rainParticleSystem.Play();
+        }
+
+        // 안개 효과
+        if (_random.NextDouble() < _config.Weather.FogProbability)
+        {
+            float density = SampleRange(_config.Weather.FogDensityRange);
+            RenderSettings.fogDensity = density;
+            RenderSettings.fog = true;
+        }
+    }
+
+    private float SampleRange(FloatRange range)
+    {
+        float multiplier = _config.Intensity switch
+        {
+            RandomizationIntensity.Low => 0.5f,
+            RandomizationIntensity.High => 1.5f,
+            _ => 1.0f
+        };
+
+        float center = (range.Min + range.Max) / 2f;
+        float halfRange = (range.Max - range.Min) / 2f * multiplier;
+
+        return center + ((float)_random.NextDouble() * 2 - 1) * halfRange;
+    }
+}
+```
+
+**핵심 원칙**:
+- ✅ **Config 기반 제어**: 모든 파라미터는 RandomizationConfig에서 관리
+- ✅ **재현 가능성**: Seed 기반 Random 사용으로 동일 Config = 동일 랜덤화
+- ✅ **강도 조절**: Low/Medium/High로 Sim-to-Real 실험 설계 지원 (UC-03)
+- ✅ **Unity 통합**: Post-Processing Stack 활용으로 성능 최적화
+
+관계:
+- TimeWeatherService와 협력하여 조명/날씨 효과 적용
+- CameraService에 노이즈 파라미터 전달
+
+---
+
+### 5.7 VisibilityService (Phase 2+)
 
 역할:  
 - 각 Agent와 카메라 간의 기본 가시성 정보 수집.
@@ -940,7 +1087,7 @@ public void MigrateToScene(string targetSceneName, NavMesh targetNavMesh)
 
 ---
 
-## 6. CCTVSim.DataModel
+## 6. Forge.DataModel
 
 주요 데이터 모델 클래스 정의.
 
@@ -1332,7 +1479,7 @@ EncodedLabel:
 
 ---
 
-## 7. CCTVSim.DataPipeline
+## 7. Forge.DataPipeline
 
 모든 Worker는 Worker Thread에서 동작하며, Unity API 사용 금지.
 
@@ -1550,40 +1697,243 @@ class DisposableScope : IDisposable {
 
 역할:
 - ReID 학습용 person crop dataset을 export하는 Worker
+- FastReID / TorchReID 호환 디렉토리 구조 생성
 
 입력:
-- RawImageData + TrackingData
+- LabeledFrame (이미지 + Tracking 정보 포함)
 
 출력:
 - ReIDExportResult (저장된 crop 파일 정보)
 
 주요 메서드:
-- void Enqueue(RawImageData image, TrackingData tracking)
+- void Enqueue(LabeledFrame labeledFrame)
 - event OnCropExported(ReIDExportResult result)
 
-Export 구조:
+**동작 방식**:
+```csharp
+public void ProcessFrame(LabeledFrame labeled)
+{
+    foreach (var cameraLabel in labeled.CameraLabels)
+    {
+        // 1. 원본 이미지 로드 (이미 StorageWorker가 저장한 파일)
+        string imagePath = GetImagePath(labeled.Frame.SessionId,
+                                        labeled.Frame.FrameId,
+                                        cameraLabel.CameraId);
+        var image = Image.Load(imagePath);
+
+        // 2. 각 person의 bbox crop 추출
+        foreach (var track in cameraLabel.Tracking)
+        {
+            int personId = track.GlobalPersonId;
+            var bbox = track.BoundingBox;
+
+            // Bbox crop
+            var croppedImage = image.Crop(bbox);
+
+            // 3. 파일명 생성: {cameraId}_frame_{frameId:D6}.jpg
+            string filename = $"{cameraLabel.CameraId}_frame_{labeled.Frame.FrameId:D6}.jpg";
+
+            // 4. Person ID별 디렉토리에 저장
+            string personDir = Path.Combine(_config.OutputPath,
+                                           "reid_dataset",
+                                           $"person_{personId:D4}");
+            Directory.CreateDirectory(personDir);
+
+            string cropPath = Path.Combine(personDir, filename);
+            croppedImage.Save(cropPath);
+
+            // 5. 메타데이터 저장 (CSV 또는 JSON)
+            AppendMetadata(personId, new PersonCropMetadata
+            {
+                FilePath = cropPath,
+                CameraId = cameraLabel.CameraId,
+                FrameId = labeled.Frame.FrameId,
+                BoundingBox = bbox,
+                SceneName = labeled.Frame.SceneName
+            });
+
+            // 6. 결과 이벤트 발행
+            OnCropExported?.Invoke(new ReIDExportResult
+            {
+                SessionId = labeled.Frame.SessionId,
+                FrameId = labeled.Frame.FrameId,
+                CameraId = cameraLabel.CameraId,
+                GlobalPersonId = personId,
+                ExportedFilePath = cropPath,
+                Success = true
+            });
+        }
+    }
+}
+```
+
+**Export 디렉토리 구조** (FastReID/TorchReID 호환):
 ```
 /output/reid_dataset/
   person_0001/
-    cam01_frame_000123.jpg
-    cam02_frame_000456.jpg
+    cam01_frame_000123.jpg     # Person 1이 Camera 1, Frame 123에 등장
+    cam01_frame_000145.jpg     # Person 1이 Camera 1, Frame 145에 등장
+    cam02_frame_000456.jpg     # Person 1이 Camera 2, Frame 456에 등장
   person_0002/
-    ...
+    cam01_frame_000124.jpg
+    cam03_frame_000789.jpg
+  ...
+  metadata.csv                 # 전체 메타데이터
 ```
+
+**metadata.csv 형식**:
+```csv
+person_id,camera_id,frame_id,scene_name,file_path,bbox_x,bbox_y,bbox_w,bbox_h
+1,cam01,123,Office,person_0001/cam01_frame_000123.jpg,120,340,80,200
+1,cam01,145,Office,person_0001/cam01_frame_000145.jpg,125,338,82,202
+1,cam02,456,Warehouse,person_0001/cam02_frame_000456.jpg,200,400,75,195
+2,cam01,124,Office,person_0002/cam01_frame_000124.jpg,300,200,85,210
+...
+```
+
+**핵심 기능**:
+- ✅ Global Person ID 기반 디렉토리 구조
+- ✅ Cross-camera crop 자동 수집 (동일 person이 여러 카메라에 나타남)
+- ✅ Scene 정보 포함 (Multi-Scene 지원)
+- ✅ FastReID/TorchReID에서 바로 학습 가능
+
+**성능 고려**:
+- Crop 추출은 I/O bound → Worker Thread에서 비동기 처리
+- 메타데이터는 BufferedWriter로 batch write
 
 ---
 
 ### 7.6 OcclusionWorker (Phase 2+)
 
+역할:
+- 각 Person의 Occlusion Ratio 및 Visibility Ratio를 계산
+
 입력:
-- VisibilityMeta(시뮬레이션에서 온 기본 정보) + TrackingData
+- FrameContext (PersonState 포함)
+- TrackingData
 
 출력:
 - OcclusionData 리스트
 
 주요 메서드:
-- void Enqueue(VisibilityMeta meta, TrackingData tracking)
+- void Enqueue(FrameContext frame, TrackingData tracking)
 - `event OnOcclusionComputed(List<OcclusionData> result)`
+
+**계산 방법** (Raycast 기반, Phase 2):
+```csharp
+public class OcclusionWorker
+{
+    // Person 신체의 주요 포인트 (Unity Humanoid Rig 기준)
+    private static readonly HumanBodyBones[] KEY_BONES = new[]
+    {
+        HumanBodyBones.Head,
+        HumanBodyBones.Neck,
+        HumanBodyBones.Chest,
+        HumanBodyBones.Spine,
+        HumanBodyBones.Hips,
+        HumanBodyBones.LeftShoulder,
+        HumanBodyBones.RightShoulder,
+        HumanBodyBones.LeftUpperArm,
+        HumanBodyBones.RightUpperArm,
+        HumanBodyBones.LeftLowerArm,
+        HumanBodyBones.RightLowerArm,
+        HumanBodyBones.LeftUpperLeg,
+        HumanBodyBones.RightUpperLeg,
+        HumanBodyBones.LeftLowerLeg,
+        HumanBodyBones.RightLowerLeg
+    };
+
+    public OcclusionData CalculateOcclusion(
+        PersonAgent agent,
+        Camera camera,
+        TrackingRecord track)
+    {
+        int totalPoints = KEY_BONES.Length;
+        int visiblePoints = 0;
+        int occludedPoints = 0;
+
+        // 1. 각 신체 부위에서 카메라로 Raycast
+        foreach (var bone in KEY_BONES)
+        {
+            Vector3 bonePosition = agent.GetBonePosition(bone);
+
+            // 카메라 방향으로 Ray 발사
+            Vector3 direction = (camera.transform.position - bonePosition).normalized;
+            float distance = Vector3.Distance(camera.transform.position, bonePosition);
+
+            // Raycast 실행
+            if (Physics.Raycast(bonePosition, direction, out RaycastHit hit, distance))
+            {
+                // Ray가 카메라에 도달하기 전에 다른 객체에 충돌
+                if (hit.collider.gameObject != agent.gameObject)
+                {
+                    occludedPoints++;  // 가려짐
+                }
+                else
+                {
+                    visiblePoints++;   // 보임
+                }
+            }
+            else
+            {
+                visiblePoints++;  // 아무것도 안 막힘 = 보임
+            }
+        }
+
+        // 2. Occlusion Ratio 계산
+        float occlusionRatio = (float)occludedPoints / totalPoints;
+        float visibilityRatio = (float)visiblePoints / totalPoints;
+
+        // 3. Bbox 기반 추가 보정 (선택적)
+        // - Bbox가 카메라 FOV 밖이면 visibility = 0
+        // - Bbox가 화면 경계에 잘리면 visibility 감소
+        var screenBbox = WorldToScreenBbox(track.BoundingBox, camera);
+        if (!IsInViewport(screenBbox, camera))
+        {
+            visibilityRatio = 0f;
+            occlusionRatio = 1f;
+        }
+
+        return new OcclusionData
+        {
+            SessionId = track.SessionId,
+            FrameId = track.FrameId,
+            CameraId = track.CameraId,
+            GlobalPersonId = track.GlobalPersonId,
+            OcclusionRatio = occlusionRatio,
+            VisibilityRatio = visibilityRatio
+        };
+    }
+
+    private bool IsInViewport(Rect screenBbox, Camera camera)
+    {
+        // Bbox 중심점이 화면 안에 있는지 체크
+        Vector2 center = screenBbox.center;
+        return center.x >= 0 && center.x <= camera.pixelWidth &&
+               center.y >= 0 && center.y <= camera.pixelHeight;
+    }
+}
+```
+
+**대안: Pixel-Perfect 계산** (Phase 3 고급 기능):
+```csharp
+// Unity Stencil Buffer 활용
+// 1. Person을 특별한 Shader로 렌더링 (ID 기록)
+// 2. 다른 객체들 렌더링 (Depth Buffer)
+// 3. ID Buffer와 Depth Buffer 비교하여 가려진 픽셀 계산
+// 4. (가려진 픽셀 수) / (전체 Person 픽셀 수) = Occlusion Ratio
+```
+
+**핵심 원칙**:
+- ✅ **Phase 2**: Raycast 기반 (15개 신체 포인트 샘플링)
+- ✅ **Phase 3**: Stencil Buffer 기반 (pixel-perfect, 선택적)
+- ✅ **정확도 vs 성능**: Raycast는 ~95% 정확도, 성능 부담 낮음
+
+**성능 고려**:
+- Raycast는 Unity Physics Thread에서 병렬 처리
+- 프레임당 (Person 수 × Camera 수 × 15 Raycast) 수행
+- 예: 30명 × 3카메라 = 90 × 15 = 1,350 Raycast/frame
+- Unity Physics는 이 정도 규모는 실시간 처리 가능
 
 ---
 
@@ -1604,6 +1954,10 @@ Export 구조:
 
 ### 7.8 EncodeWorker
 
+역할:
+- 이미지를 JPG/PNG로 인코딩
+- 라벨을 JSON/YOLO/COCO 포맷으로 변환
+
 입력:
 - LabeledFrame
 - RawImageData[] (각 camera_id별)
@@ -1614,6 +1968,186 @@ Export 구조:
 주요 메서드:
 - void Enqueue(LabeledFrame frame, RawImageData[] images)
 - event OnEncoded(EncodedFrame encoded)
+
+**라벨 포맷 변환** (OutputConfig.LabelFormat 기반):
+
+**1. JSON 포맷** (기본):
+```json
+{
+  "session_id": "session_001",
+  "frame_id": 123,
+  "scene_name": "Office",
+  "timestamp": "2025-02-14T10:30:45Z",
+  "cameras": [
+    {
+      "camera_id": "cam01",
+      "detections": [
+        {
+          "global_person_id": 5,
+          "track_id": 12,
+          "bbox": { "x": 120, "y": 340, "w": 80, "h": 200 },
+          "confidence": 0.98,
+          "occlusion_ratio": 0.15,
+          "visibility_ratio": 0.85
+        }
+      ]
+    }
+  ]
+}
+```
+
+**2. YOLO 포맷** (Phase 2+):
+```csharp
+public string ConvertToYOLO(CameraLabelData cameraLabel, int imageWidth, int imageHeight)
+{
+    var lines = new List<string>();
+
+    foreach (var track in cameraLabel.Tracking)
+    {
+        // YOLO format: <class> <x_center> <y_center> <width> <height> (normalized 0~1)
+        int classId = 0;  // "person" class = 0
+
+        var bbox = track.BoundingBox;
+        float x_center = (bbox.x + bbox.width / 2f) / imageWidth;
+        float y_center = (bbox.y + bbox.height / 2f) / imageHeight;
+        float width = bbox.width / (float)imageWidth;
+        float height = bbox.height / (float)imageHeight;
+
+        lines.Add($"{classId} {x_center:F6} {y_center:F6} {width:F6} {height:F6}");
+    }
+
+    return string.Join("\n", lines);
+}
+```
+
+**YOLO 파일 구조**:
+```
+/output/session_001/
+  images/
+    cam01/
+      frame_000123.jpg
+      frame_000124.jpg
+  labels/
+    cam01/
+      frame_000123.txt    # YOLO 포맷
+      frame_000124.txt
+  classes.txt             # "person\n"
+```
+
+**3. COCO 포맷** (Phase 2+):
+```csharp
+public class COCOExporter
+{
+    private COCODataset _dataset;
+
+    public void Initialize(SessionContext session)
+    {
+        _dataset = new COCODataset
+        {
+            Info = new COCOInfo
+            {
+                Description = $"SynCCTV Session {session.SessionId}",
+                Version = "1.0",
+                Year = DateTime.Now.Year,
+                DateCreated = session.StartedAt
+            },
+            Categories = new List<COCOCategory>
+            {
+                new COCOCategory { Id = 1, Name = "person", Supercategory = "person" }
+            },
+            Images = new List<COCOImage>(),
+            Annotations = new List<COCOAnnotation>()
+        };
+    }
+
+    public void AddFrame(LabeledFrame labeled, string imageFilePath, int imageWidth, int imageHeight)
+    {
+        int imageId = _dataset.Images.Count + 1;
+
+        // Add image entry
+        _dataset.Images.Add(new COCOImage
+        {
+            Id = imageId,
+            FileName = Path.GetFileName(imageFilePath),
+            Width = imageWidth,
+            Height = imageHeight,
+            DateCaptured = labeled.Frame.Timestamp
+        });
+
+        // Add annotations
+        foreach (var cameraLabel in labeled.CameraLabels)
+        {
+            foreach (var track in cameraLabel.Tracking)
+            {
+                var bbox = track.BoundingBox;
+
+                _dataset.Annotations.Add(new COCOAnnotation
+                {
+                    Id = _dataset.Annotations.Count + 1,
+                    ImageId = imageId,
+                    CategoryId = 1,  // person
+                    Bbox = new float[] { bbox.x, bbox.y, bbox.width, bbox.height },
+                    Area = bbox.width * bbox.height,
+                    Iscrowd = 0,
+                    // 추가 필드
+                    Attributes = new Dictionary<string, object>
+                    {
+                        { "global_person_id", track.GlobalPersonId },
+                        { "track_id", track.TrackId },
+                        { "occlusion_ratio", track.OcclusionRatio },
+                        { "visibility_ratio", track.VisibilityRatio }
+                    }
+                });
+            }
+        }
+    }
+
+    public void Export(string outputPath)
+    {
+        string json = JsonSerializer.Serialize(_dataset, new JsonSerializerOptions
+        {
+            WriteIndented = true
+        });
+        File.WriteAllText(Path.Combine(outputPath, "annotations.json"), json);
+    }
+}
+```
+
+**COCO 파일 구조**:
+```
+/output/session_001/
+  images/
+    frame_000123.jpg
+    frame_000124.jpg
+  annotations.json        # COCO 포맷 (전체 세션 통합)
+```
+
+**OutputConfig 구조**:
+```csharp
+public class OutputConfig
+{
+    public ImageFormat ImageFormat { get; set; } = ImageFormat.JPG;  // JPG, PNG
+    public LabelFormat LabelFormat { get; set; } = LabelFormat.JSON;  // JSON, YOLO, COCO
+    public int JpgQuality { get; set; } = 90;  // 0~100
+    public bool ExportReIDDataset { get; set; } = false;  // Phase 2+
+}
+
+public enum LabelFormat
+{
+    JSON,   // 기본 (커스텀 JSON)
+    YOLO,   // YOLOv5/v8 호환
+    COCO    // COCO 2017 호환
+}
+```
+
+**핵심 원칙**:
+- ✅ **JSON**: 기본 포맷, 모든 메타데이터 포함 (occlusion, visibility, global_id 등)
+- ✅ **YOLO**: Detection/Tracking 학습에 최적화 (단순, 빠름)
+- ✅ **COCO**: 연구용, 표준 벤치마크 호환
+
+**구현 팁**:
+- YOLO는 프레임별 txt 파일 (병렬 쓰기 가능)
+- COCO는 세션 전체 1개 JSON (BufferedWriter + 세션 종료 시 flush)
 
 ---
 
@@ -1661,7 +2195,7 @@ Export 구조:
 
 ---
 
-## 8. CCTVSim.Services
+## 8. Forge.Services
 
 ### 8.1 ValidationService
 

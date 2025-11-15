@@ -1,4 +1,4 @@
-CCTV Synthetic Data Generation Engine
+Forge
 
 ---
 
@@ -10,7 +10,7 @@ CCTV Synthetic Data Generation Engine
 
 ## 1. 목적 (Purpose)
 
-본 문서는 CCTV Synthetic Data Generation Engine의 **전체 시스템 아키텍처**를 정의한다.
+본 문서는 Forge의 **전체 시스템 아키텍처**를 정의한다.
 
 - URS v2, SRS v2에서 정의한 요구사항을 만족하는 구조를 제시한다.
 - 계층(Layer), 주요 컴포넌트, 실행 흐름, 스레드 모델, 데이터 흐름, 오류 처리, 확장 전략을 기술한다.
@@ -1074,8 +1074,12 @@ class TaskDistributor {
             foreach (var task in failedTasks) {
                 task.AssignedWorker = null;
                 _pendingTasks.Enqueue(task);
+
+                // DB 연동: job_queue.status를 'pending'으로 롤백하고 worker_id를 NULL로 설정
+                _jobQueueRepository.MarkPending(task.JobId);
             }
 
+            _workerNodeRepository.UpdateStatus(workerId, "offline");
             ReassignPendingTasks();
         }
     }

@@ -1,4 +1,4 @@
-Synthetic Data Generation Engine
+Forge
 
 ---
 
@@ -10,7 +10,7 @@ Synthetic Data Generation Engine
 
 ## 1. 목적 (Purpose)
 
-본 문서는 CCTV Synthetic Data Generation Engine의 **데이터 파이프라인**을  
+본 문서는 Forge의 **데이터 파이프라인**을  
 구체적으로 정의한다.
 
 - Stage(단계)별 입력/출력/큐/스레드/오류/백프레셔(back-pressure)를 명시한다.

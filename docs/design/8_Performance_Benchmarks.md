@@ -5,7 +5,7 @@
 
 ## 1. 목적
 
-CCTV Synthetic Data Generation Engine의 성능 목표를 정의하고,
+Forge의 성능 목표를 정의하고,
 측정 방법, 도구, 벤치마크 시나리오를 명시한다.
 
 ---
@@ -195,17 +195,17 @@ dotnet run -c Release --project tests/performance/Benchmarks.csproj
 # Prometheus metrics endpoint: /metrics
 
 # FPS
-cctvsim_session_fps_current 14.5
+forge_session_fps_current 14.5
 
 # Queue depth
-cctvsim_pipeline_queue_depth{stage="capture"} 120
-cctvsim_pipeline_queue_depth{stage="detection"} 340
+forge_pipeline_queue_depth{stage="capture"} 120
+forge_pipeline_queue_depth{stage="detection"} 340
 
 # Processing time
-cctvsim_worker_processing_time_ms{worker="detection"} 45.2
+forge_worker_processing_time_ms{worker="detection"} 45.2
 
 # Memory
-cctvsim_process_memory_bytes 4294967296
+forge_process_memory_bytes 4294967296
 ```
 
 **Grafana Dashboard**:
