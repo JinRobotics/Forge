@@ -1,3 +1,3 @@
 <p align="center">
-  <img src="https://github.com/JinRobotics/Forge/blob/main/assets/banner.png?raw=true" width="80%"><br>
+  <img src="https://github.com/JinRobotics/Forge/blob/main/assets/logo.png?raw=true" width="50%"><br>
 </p>
