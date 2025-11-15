@@ -21,17 +21,19 @@ API 계약을 명확히 함으로써 레이어 간 결합도를 낮추고 기능
 
 ## 3. Orchestration ↔ Simulation API
 
-C# 백엔드(클라이언트)가 Unity 시뮬레이터(서버)를 제어하는 모델을 기준으로 한다.
+본 API는 **Simulation Gateway 모드**가 `remote` 또는 `distributed`일 때 적용된다.  
+기본 모드(InProcessUnityBridge)에서는 동일 프로세스 내에서 직접 메서드 호출을 사용하므로 HTTP 트래픽이 발생하지 않는다.  
+Config에서 `simulation.gateway.mode=os-process` 혹은 `distributed`를 설정하면 Orchestration Layer가 본 명세에 맞춰 HTTP 클라이언트를 활성화한다.
 
 ### 3.1 통신 모델
 
 - **프로토콜**: HTTP/1.1 (로컬 호스트 기반, 기본 포트 `8080`)
 - **엔드포인트 베이스 URI**: `http://localhost:8080/api/simulation`
 - **데이터 형식**: `application/json; charset=utf-8`
-- **보안/인증 옵션**:
-  - 기본: 로컬 프로세스 간 통신이라 인증 생략
-  - 분산/원격 배포 시 mTLS 또는 IPC 채널 적용
-  - HTTP 헤더 `X-Api-Key`(단일 키) 또는 `Authorization: Bearer <token>` 사용 가능하도록 서버 설정 옵션 제공 (필요 시 CLI에서 전달)
+- **보안/인증 옵션 (NFR-12 대응)**:
+  - 기본 모드: `127.0.0.1`에만 바인딩하며 인증 생략.
+  - `remote/distributed` 모드: mTLS 혹은 API Key 필수. 기본 바인딩은 `127.0.0.1`; 필요 시 `allowedHosts`에 명시한 주소만 허용.
+  - HTTP 헤더 `X-Api-Key`(단일 키) 또는 `Authorization: Bearer <token>` 사용 가능. CLI/Config에서 `simulation.gateway.auth.*`로 설정.
 - **재시도 권장 정책**:
   - 네트워크 타임아웃/5xx 응답 시 지수 백오프(초기 1초, 최대 5회)로 재시도
   - 4xx는 클라이언트 오류로 간주하고 즉시 사용자에게 전파
@@ -72,7 +74,7 @@ C# 백엔드(클라이언트)가 Unity 시뮬레이터(서버)를 제어하는 �
 
 | Method & Path             | 설명                         | 주요 파라미터                                     | 성공 응답                     | 비고                               |
 | ------------------------- | -------------------------- | ------------------------------------------- | ------------------------- | ---------------------------------- |
-| `POST /session/init`      | Scene Pool 및 리소스 초기화       | `sessionId`, `scenePool[]`, `engineVersion` | `{status:"success"}`      | Scene 캐시 구축 및 버전 호환성 검사 |
+| `POST /session/init`      | Scene Pool 및 리소스 초기화       | `sessionId`, `scenePool[]`, `engineVersion`, `authMode` | `{status:"success"}`      | Scene 캐시 구축 및 버전 호환성 검사 |
 | `POST /session/start`     | 프레임 루프 시작                  | `SessionConfig` 전체                          | `{status:"success"}`      | 시작 전 `init` 필수, 인증 필요        |
 | `POST /session/stop`      | 세션 중단/리소스 해제               | 없음                                          | `{status:"success"}`      | 비정상 종료 시에도 호출, 재시도 가능     |
 | `POST /scenario/activate` | 런타임 Scene/환경 전환 (Phase 2+) | `sceneName`, `timeWeather`, `randomization` | `{status:"success"}`      | Scene 전환 완료 후 응답, 버전 체크 포함  |
@@ -85,7 +87,8 @@ C# 백엔드(클라이언트)가 Unity 시뮬레이터(서버)를 제어하는 �
   {
     "sessionId": "session_20231027_factory",
     "scenePool": ["Factory", "Office"],
-    "engineVersion": "1.0.0"
+    "engineVersion": "1.0.0",
+    "authMode": "api-key"
   }
   ```
 - **Response 200**
@@ -171,6 +174,7 @@ CLI/SDK 구성 시:
 | `cameras[]` | array | ✅ | 1~6개, 고유 `id` 필수 | 아래 참조 |
 | `crowd` | object | ✅ | 인원/행동 정의 | 아래 참조 |
 | `timeWeather` | object | ✅ | 기본 시간/조명/날씨 | 아래 참조 |
+| `simulationGateway` | object | ✅ | Unity와의 통신 모드/보안/포트 정의 | 아래 4.4 |
 | `randomization` | object | Phase 2+ | Domain Randomization 파라미터 |  |
 | `output` | object | ✅ | 이미지/라벨 포맷, manifest 옵션 |  |
 | `pipeline` | object | Phase 2+ | 워커 병렬도, 큐 사이즈 |  |
@@ -197,6 +201,37 @@ CLI/SDK 구성 시:
 | `position` | float[3] | Unity world 좌표 |
 | `rotation` | float[3] | Euler 각 |
 | `sensorNoise` | object | (선택) 감마/노이즈 옵션 |
+
+### 4.4 Simulation Gateway 섹션
+
+Config 예시:
+```json
+"simulationGateway": {
+  "mode": "inprocess",
+  "host": "127.0.0.1",
+  "port": 8080,
+  "auth": {
+    "type": "api-key",
+    "apiKeyEnv": "CCTV_SIM_API_KEY"
+  },
+  "allowedHosts": ["127.0.0.1"]
+}
+```
+
+| 필드 | 필수 | 설명 |
+|------|------|------|
+| `mode` | ✅ | `inprocess`, `remote`, `distributed` 중 선택. Orchestration이 사용할 `SimulationGateway` 타입을 결정한다. |
+| `host` / `port` | remote+ | HTTP 모드에서 바인딩할 주소. 기본 `127.0.0.1:8080`. |
+| `auth.type` | remote+ | `none`, `api-key`, `mtls`. `mode=inprocess`일 때 자동으로 `none`. |
+| `auth.apiKeyEnv` | api-key | CLI/서비스가 사용할 환경 변수명. 없으면 Config에 직접 키를 저장하지 않는 것이 원칙. |
+| `auth.certPath`/`keyPath` | mtls | mTLS 구성에 필요한 인증서 경로. |
+| `allowedHosts[]` | remote+ | HTTP 서버가 수락할 호스트 화이트리스트. 기본 `["127.0.0.1"]`. |
+
+**적용 규칙**
+- `mode=inprocess`: Unity 프로세스 내부 MonoBehaviour → `UnityBridge`. HTTP 설정 무시.
+- `mode=remote`: Unity가 별도 프로세스. `/session/*` REST API를 사용하며 API Specification §3 전체 적용.
+- `mode=distributed`: Master/Worker 통신은 §8 분산 아키텍처와 동일하며, Worker 측 SimulationGateway는 보통 `remote` 모드를 사용한다.
+- NFR-12 준수를 위해 remote/distributed 모드에서는 반드시 `auth.type`과 `allowedHosts`를 명시한다.
 
 ### 4.4 Crowd & Behavior
 

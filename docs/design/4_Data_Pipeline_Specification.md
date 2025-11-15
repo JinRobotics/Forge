@@ -2,9 +2,10 @@ Synthetic Data Generation Engine
 
 ---
 
-> **문서 버전:** v1.1 (2025-02-14)  
-> **변경 이력:**  
-> - v1.1 (2025-02-14): ReID Dataset Export Stage 반영, 버전 섹션 추가  
+> **문서 버전:** v2.0 (2025-02-15)
+> **변경 이력:**
+> - v2.0 (2025-02-15): FrameBus Thread-safety 구체화, Zero-Copy Pipeline 옵션 추가
+> - v1.1 (2025-02-14): ReID Dataset Export Stage 반영, 버전 섹션 추가
 > - v1.0 (2024-12-01): 초기 작성
 
 ## 1. 목적 (Purpose)
@@ -18,7 +19,7 @@ Synthetic Data Generation Engine
 - 성능/안정성/운영 관점에서 구현 시 반드시 지켜야 할 규칙을 제공한다.
 
 대상 범위:
-- FrameBus → Capture → Detection → Tracking → ReID → Occlusion → LabelAssembler → Encode → Storage → Validation/Stats/Manifest
+- FrameBus → Capture → Detection → Tracking → ReID → Occlusion → LabelAssembler → Encode → Storage → Edge Export → Validation/Stats/Manifest
 
 ---
 
@@ -35,13 +36,15 @@ Synthetic Data Generation Engine
 7. Encode Stage (EncodeWorker)
 8. Storage Stage (StorageWorker)
 9. ReID Export Stage (ReIDExportWorker, Phase 2+)
-10. Post-processing (ValidationService / StatsService / ManifestService)
+10. Edge Export Stage (EdgeExportWorker, Phase 3+)
+11. Post-processing (ValidationService / StatsService / ManifestService)
 
 각 Stage는 **Worker + 입력 Queue**로 구성되며,  
 Stage 간에는 데이터 모델(DataModel v2)을 통해 전달된다.
 
 ### 2.2 데이터 모델 흐름
 
+**기본 방식 (Phase 1-2):**
 - FrameContext (+ CameraMeta)
   → RawImageData[]
   → DetectionData
@@ -49,9 +52,41 @@ Stage 간에는 데이터 모델(DataModel v2)을 통해 전달된다.
   → OcclusionData (optional)
   → LabeledFrame
   → EncodedFrame
-  → Files + manifest.json
+  → Files (이미지/라벨) + EdgeExportArtifacts (옵션)
 
-별도 흐름 (ReID Export):
+각 Stage가 새 객체 생성 (불변성 보장, Thread-safe)
+
+**Zero-Copy 방식 (Phase 2+ 옵션):**
+```csharp
+class FramePipelineContext {
+    public FrameContext Frame { get; init; }
+    public RawImageData[] Images { get; set; }
+    public DetectionData Detection { get; set; }
+    public TrackingData Tracking { get; set; }
+    public LabeledFrame Label { get; set; }
+    public EncodedFrame Encoded { get; set; }
+}
+
+// 단일 FramePipelineContext 객체가 파이프라인 전체를 통과
+// 메모리 복사 최소화, GC 부담 감소
+```
+
+**Trade-off:**
+| 항목 | 기본 방식 | Zero-Copy 방식 |
+|------|----------|---------------|
+| 메모리 사용 | 높음 (복사 발생) | 낮음 (재사용) |
+| Thread-safety | 높음 (불변 객체) | 낮음 (공유 상태) |
+| 디버깅 | 쉬움 (각 Stage 분리) | 어려움 (상태 추적 복잡) |
+| 적용 시점 | Phase 1 기본 | Phase 2+ 성능 측정 후 |
+
+**선택 기준:**
+```
+IF (메모리 사용량 > 8GB AND GC 시간 > 10%)
+THEN Zero-Copy 방식 고려
+ELSE 기본 방식 유지 (단순성 우선)
+```
+
+**별도 흐름 (ReID Export):**
 - RawImageData + TrackingData → ReID Crop Images (person_id 기반 디렉토리)
 
 ### 2.3 Frame Generation Sequence Diagram
@@ -213,10 +248,97 @@ Queue:
 - Publish: Main Thread (GenerationController)
 - Consume: CaptureWorker Thread
 
+**Thread-safety 구현 (구체화):**
+
+```csharp
+public class FrameBus : IFrameBus {
+    // Thread-safe queue (lock-free)
+    private readonly ConcurrentQueue<FrameJob> _queue = new();
+
+    // Semaphore for blocking wait (메모리 효율)
+    private readonly SemaphoreSlim _signal = new(0);
+
+    // Cancellation for graceful shutdown
+    private readonly CancellationTokenSource _cts = new();
+
+    // Back-pressure tracking
+    private int _queueLength = 0;
+    private const int QUEUE_CAPACITY = 512;
+
+    // Unity Main Thread에서 호출
+    public bool Publish(FrameContext frame, List<CameraMeta> cameras) {
+        // Back-pressure 체크
+        var currentLength = Interlocked.Increment(ref _queueLength);
+
+        if (currentLength > QUEUE_CAPACITY) {
+            Interlocked.Decrement(ref _queueLength);
+            _logger.LogWarning($"FrameBus queue full ({QUEUE_CAPACITY}), dropping frame {frame.FrameId}");
+            return false;
+        }
+
+        var job = new FrameJob {
+            Frame = frame,
+            Cameras = cameras,
+            PublishedAt = DateTime.UtcNow
+        };
+
+        _queue.Enqueue(job);
+        _signal.Release(); // Worker 쓰레드 깨우기
+
+        return true;
+    }
+
+    // Worker Thread에서 호출
+    public async Task<FrameJob> ConsumeAsync(CancellationToken ct) {
+        // Semaphore 대기 (CPU 점유 없이 blocking)
+        await _signal.WaitAsync(ct);
+
+        if (_queue.TryDequeue(out var job)) {
+            Interlocked.Decrement(ref _queueLength);
+
+            // 대기 시간 모니터링
+            var latency = DateTime.UtcNow - job.PublishedAt;
+            if (latency > TimeSpan.FromSeconds(1)) {
+                _logger.LogWarning($"Frame {job.Frame.FrameId} latency: {latency.TotalMilliseconds}ms");
+            }
+
+            return job;
+        }
+
+        throw new InvalidOperationException("Semaphore released but queue empty (race condition)");
+    }
+
+    // 현재 큐 길이 (모니터링용)
+    public int GetQueueLength() => _queueLength;
+
+    // Graceful shutdown
+    public async Task Shutdown() {
+        _cts.Cancel();
+
+        // 남은 작업 처리 대기 (최대 5초)
+        var timeout = Task.Delay(TimeSpan.FromSeconds(5));
+        while (_queueLength > 0 && !timeout.IsCompleted) {
+            await Task.Delay(100);
+        }
+
+        _logger.LogInfo($"FrameBus shutdown, {_queueLength} frames dropped");
+    }
+}
+```
+
+**동시성 안전성 분석:**
+
+| 항목 | 전략 | 이유 |
+|------|------|------|
+| **Queue 구조** | `ConcurrentQueue<T>` | Lock-free, MPSC(Multi-Producer-Single-Consumer) 최적화 |
+| **Blocking** | `SemaphoreSlim` | `Thread.Sleep` 대비 CPU 점유 최소화 |
+| **Counter** | `Interlocked` | Atomic 연산으로 정확한 큐 길이 추적 |
+| **Back-pressure** | Capacity 초과 시 Publish 거부 | OOM 방지 |
+
 순서:
 - FrameContext는 frame_id 순으로 publish된다.
-- CaptureWorker는 frame_id 순서를 **가능한 유지**하지만,  
-  파이프라인은 전체적으로 “frame 단위 작업 완료 순서”에 제한을 두지 않는다.
+- CaptureWorker는 frame_id 순서를 **가능한 유지**하지만,
+  파이프라인은 전체적으로 "frame 단위 작업 완료 순서"에 제한을 두지 않는다.
 
 에러:
 - FrameBus에서 에러 발생 시(메모리 부족 등), 해당 frame을 drop하고 경고 로그 남김.
@@ -224,6 +346,7 @@ Queue:
 
 성능 목표:
 - FrameBus 자체는 병목이 되지 않을 것 (복잡한 연산 금지).
+- Publish/Consume 각각 < 1ms (lock contention 최소화)
 
 ---
 
@@ -305,12 +428,14 @@ Queue:
 
 역할:
 - Detection 결과 기반으로 카메라별 Tracking 수행.
+- Simulation Layer의 PersonState와 매칭하여 Global Person ID 할당
 
 Input:
 - DetectionData
+- FrameContext (PersonState 포함)
 
 Output:
-- TrackingData (track_id 포함)
+- TrackingData (track_id + global_person_id 포함)
 
 Queue:
 - 입력 큐: `Queue<DetectionData>`
@@ -382,20 +507,151 @@ Queue:
 동시성:
 - LabelAssembler Thread: 1 (권장)
 
+**Join 로직 상세 구현 (구체화):**
+
+```csharp
+public class LabelAssembler {
+    // Frame별 부분 데이터를 임시 저장
+    private readonly ConcurrentDictionary<long, PartialFrameData> _pendingFrames = new();
+
+    // 타임아웃 설정 (Config 가능)
+    private readonly TimeSpan _joinTimeout = TimeSpan.FromSeconds(5);
+    private readonly int _maxPendingFrames = 100; // 메모리 제한
+
+    public async Task AssembleAsync(CancellationToken ct) {
+        while (!ct.IsCancellationRequested) {
+            // 주기적으로 타임아웃 체크 (100ms마다)
+            await Task.Delay(100, ct);
+
+            var now = DateTime.UtcNow;
+            var completedFrames = new List<long>();
+
+            foreach (var (frameId, partial) in _pendingFrames) {
+                // 1. 모든 필수 데이터 도착 → 즉시 조립
+                if (partial.HasTracking) {
+                    var labeled = BuildLabeledFrame(partial);
+                    OnLabeled?.Invoke(labeled);
+                    completedFrames.Add(frameId);
+                    continue;
+                }
+
+                // 2. 타임아웃 발생 → partial data로 진행
+                if (now - partial.CreatedAt > _joinTimeout) {
+                    _logger.LogWarning($"Frame {frameId} timeout after {_joinTimeout.TotalSeconds}s, " +
+                                     $"assembling with partial data (hasTracking={partial.HasTracking})");
+
+                    if (partial.HasTracking) {
+                        var labeled = BuildLabeledFrame(partial);
+                        OnLabeled?.Invoke(labeled);
+                    } else {
+                        _logger.LogError($"Frame {frameId} missing critical data (Tracking), skipping");
+                    }
+
+                    completedFrames.Add(frameId);
+                }
+            }
+
+            // 완료된 프레임 정리
+            foreach (var frameId in completedFrames) {
+                _pendingFrames.TryRemove(frameId, out _);
+            }
+
+            // 3. 메모리 제한 초과 시 오래된 프레임 강제 제거
+            if (_pendingFrames.Count > _maxPendingFrames) {
+                var oldestFrames = _pendingFrames
+                    .OrderBy(kvp => kvp.Value.CreatedAt)
+                    .Take(_pendingFrames.Count - _maxPendingFrames)
+                    .Select(kvp => kvp.Key)
+                    .ToList();
+
+                foreach (var frameId in oldestFrames) {
+                    _logger.LogError($"Frame {frameId} evicted (memory limit), data lost");
+                    _pendingFrames.TryRemove(frameId, out _);
+                }
+            }
+        }
+    }
+
+    public void OnTrackingReceived(TrackingData tracking) {
+        var partial = _pendingFrames.GetOrAdd(tracking.FrameId, _ => new PartialFrameData {
+            FrameId = tracking.FrameId,
+            CreatedAt = DateTime.UtcNow
+        });
+
+        partial.Tracking = tracking;
+        partial.HasTracking = true;
+    }
+
+    public void OnOcclusionReceived(List<OcclusionData> occlusion) {
+        var frameId = occlusion.FirstOrDefault()?.FrameId ?? 0;
+        if (frameId == 0) return;
+
+        var partial = _pendingFrames.GetOrAdd(frameId, _ => new PartialFrameData {
+            FrameId = frameId,
+            CreatedAt = DateTime.UtcNow
+        });
+
+        partial.Occlusion = occlusion;
+    }
+
+    private LabeledFrame BuildLabeledFrame(PartialFrameData partial) {
+        return new LabeledFrame {
+            Frame = new FrameContext { FrameId = partial.FrameId },
+            CameraLabels = new List<CameraLabelData> {
+                new CameraLabelData {
+                    Tracking = partial.Tracking?.ToRecords() ?? new List<TrackingRecord>(),
+                    Occlusion = partial.Occlusion // nullable
+                }
+            }
+        };
+    }
+}
+
+class PartialFrameData {
+    public long FrameId { get; set; }
+    public DateTime CreatedAt { get; set; }
+
+    public TrackingData Tracking { get; set; }
+    public List<OcclusionData> Occlusion { get; set; }
+
+    public bool HasTracking { get; set; }
+}
+```
+
+**타임아웃 정책 (수치화):**
+
+| 항목 | 값 | 설명 |
+|------|------|------|
+| **Join Timeout** | 5초 | Tracking 데이터 대기 최대 시간 |
+| **Polling Interval** | 100ms | 타임아웃 체크 주기 |
+| **Max Pending Frames** | 100 | 메모리 제한 (Frame별 평균 10KB 기준 1MB) |
+| **필수 데이터** | TrackingData | 없으면 Frame skip |
+| **선택 데이터** | OcclusionData | 없어도 진행 (Phase 2+) |
+
+**타임아웃 발생 시나리오:**
+
+1. **OcclusionWorker 지연** (정상):
+   - TrackingData 있음, OcclusionData 없음
+   - → Occlusion 없이 LabeledFrame 생성 (경고 로그)
+
+2. **TrackingWorker 장애** (비정상):
+   - TrackingData 없음
+   - → Frame 전체 skip (에러 로그)
+
+3. **메모리 제한 초과**:
+   - 100개 초과 Frame 대기 중
+   - → 가장 오래된 Frame 강제 제거 (데이터 손실)
+
 순서:
 - frame_id 단위로 join 수행.
 - 각 Stage 결과가 도착하는 시점이 다를 수 있으므로,
-  일정 시간/프레임 수 동안 결과를 기다린 뒤 join / 타임아웃 정책 필요.
-
-타임아웃 정책 예:
-- LabelAssembler는 특정 frame_id에 대해 최대 T초 또는 N frames까지 기다린다.
-- 그 안에 Occlusion 결과가 도착하지 않으면, 없는 것으로 간주하고 진행.
+  타임아웃 내에 도착한 데이터만 조합.
 
 에러 처리:
 - 일부 데이터 누락(Occlusion 없는 경우):
   - 해당 필드 없이 LabeledFrame 생성 (optional 필드로 설계)
 - TrackingData 자체 없음:
-  - LabeledFrame은 생성하지만 빈 cameraLabels 또는 "no person" 상태로 기록 가능.
+  - Frame 전체 skip (에러 로그)
 
 ---
 
@@ -465,7 +721,7 @@ Queue:
 
 ---
 
-### 4.9 ReID Export Stage – ReIDExportWorker (Phase 2+)
+### 4.10 ReID Export Stage – ReIDExportWorker (Phase 2+)
 
 역할:
 - ReID 모델 학습에 필요한 person crop dataset을 export
@@ -521,7 +777,58 @@ Export 디렉토리 구조:
 
 ---
 
-### 4.10 Post-processing – Validation / Stats / Manifest
+### 4.11 Edge Export Stage – EdgeExportWorker (Phase 3+)
+
+역할:
+- Edge 디바이스 학습/추론 파이프라인을 위한 TFLite/ONNX/Custom Binary 라벨을 생성.
+- EncodeWorker/StorageWorker가 생성한 데이터를 바탕으로 `.record`, `.npz`, `.bin`, `edge_manifest.json` 등을 만든다.
+
+Input:
+- `EncodedFrame` 참조(이미지 bytes, 파일 경로)
+- `LabeledFrame` 또는 `EdgeLabelSummary` (bbox, track_id, occlusion 등)
+- SessionConfig의 `edgeExport` 섹션 (출력 포맷/모델/버전 정보)
+
+Output:
+- `EdgeExportArtifact`(포맷, 파일 경로, checksum)
+- Session 종료 시 EdgeExportService로 전달되어 `edge_packages/{format}/`에 저장
+
+Queue:
+- 입력 큐: `Queue<EdgeExportJob>`
+- 기본 큐 크기: 1024 (디폴트), 메모리 사용량에 따라 Config 조정
+
+동시성:
+- EdgeExportWorker Thread: 1 (GPU 기반 모델 변환 시) ~ N (단순 패키징 시)
+- 포맷별 파이프라인을 분리해 병렬 처리 가능
+
+에러 처리:
+- 특정 포맷 실패 시 해당 artifact만 건너뛰고 경고 로그 남김.
+- 모델 변환 실패/권한 오류/디스크 부족 발생 시 세션 상태에 경고를 추가하고 manifest `edgeArtifacts[].status` 필드를 `failed`로 설정.
+
+디렉터리 구조:
+```
+edge_packages/
+  tflite/
+    data.record
+    labels.bin
+    tflite_manifest.json
+  onnx/
+    tensors.npz
+    metadata.json
+  visibility_binary/
+    frame_000123.bin
+```
+
+manifest 확장:
+```json
+"edgeArtifacts": [
+  {"format": "tflite-record", "path": "edge_packages/tflite/data.record", "checksum": "sha256:...", "status": "ready"},
+  {"format": "onnx-bundle", "path": "edge_packages/onnx/", "status": "failed"}
+]
+```
+
+---
+
+### 4.12 Post-processing – Validation / Stats / Manifest
 
 역할:
 - 세션 종료 후 정합성/품질/통계/메타데이터를 집계.
@@ -567,6 +874,7 @@ Output:
 - EncodeQueue: 2048
 - StorageQueue: 4096
 - ReIDExportQueue: 1024 (Phase 2+, optional)
+- EdgeExportQueue: 1024 (Phase 3+, optional)
 
 각 Stage별 임계값은 Config로 조정 가능.
 
@@ -602,6 +910,8 @@ Output:
       - `manifest.json`
       - `validation_report.json`
       - `stats.json` (선택 또는 manifest에 포함)
+    - `edge_packages/` (Phase 3+)
+      - `tflite/`, `onnx/`, `custom_binary/` 등 Config 기반 하위 디렉터리
 
 ### 6.2 파일명 규칙
 
@@ -626,6 +936,7 @@ Output:
 - person_count
 - validation_summary
 - stats_summary
+- edgeArtifacts (포맷, 경로, checksum, 상태)
 
 ---
 

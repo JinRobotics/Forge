@@ -28,7 +28,7 @@ SynCCTV/
 │   │   ├── 0_Concept_Document.md
 │   │   └── 1_User_Requirements.md
 │   └── design/
-│       ├── 0. Repo Structure.md
+│       ├── 0_Repo Structure.md
 │       ├── 2_System_Requirements.md
 │       ├── 3_System_Architecture.md
 │       ├── 4_Class_Design_Document.md

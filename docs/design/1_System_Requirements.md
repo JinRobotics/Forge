@@ -38,14 +38,13 @@ CCTV Synthetic Data Generation Engine
 - **Session**: 하나의 시뮬레이션 실행 전체
 - **Global ID**: Session 전체에서 동일 인물을 식별하는 ID
 - **Track ID**: 카메라별 temporal ID
-- **Embedding**: Appearance feature vector (차원은 고정 아님)
 - **Config**: 사용자 설정(환경/카메라/군중/출력 옵션 포함)
 
 ---
 
 # 4. Functional Requirements (FR)
 
-SR에서는 다음 6개의 영역으로 구분한다.
+SR에서는 다음 8개의 영역으로 구분한다.
 
 1) Scene System  
 2) Camera System  

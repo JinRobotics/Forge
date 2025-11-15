@@ -2,9 +2,10 @@ CCTV Synthetic Data Generation Engine
 
 ---
 
-> **문서 버전:** v1.1 (2025-02-14)  
-> **변경 이력:**  
-> - v1.1 (2025-02-14): 데이터 모델/Worker 설명 정리, 버전 섹션 추가  
+> **문서 버전:** v2.0 (2025-02-15)
+> **변경 이력:**
+> - v2.0 (2025-02-15): SessionManager 책임 분리, Rich Domain Model 도입, 메모리 풀링 적용
+> - v1.1 (2025-02-14): 데이터 모델/Worker 설명 정리, 버전 섹션 추가
 > - v1.0 (2024-12-01): 초기 작성
 
 ## 1. 문서 목적
@@ -45,7 +46,7 @@ classDiagram
         -sessionContext: SessionContext
         -scenarioManager: ScenarioManager
         -frameBus: IFrameBus
-        -currentFrame: int
+        -currentFrame: long
         -targetFps: float
         +Initialize(session: SessionContext) void
         +Update() void
@@ -80,7 +81,7 @@ classDiagram
     class SessionContext {
         +config: SessionConfig
         +sessionDirectory: string
-        +currentFrame: int
+        +currentFrame: long
         +startedAt: DateTime
     }
 
@@ -157,6 +158,14 @@ classDiagram
         +ProcessJob(job: EncodedFrame) void
         +OnStored: Event~StoredResult~
     }
+    class EdgeExportWorker {
+        +ProcessJob(job: EdgeExportJob) void
+        +OnArtifactCreated: Event~EdgeExportArtifact~
+    }
+    class EdgeExportService {
+        +RecordArtifact(artifact: EdgeExportArtifact) void
+        +Finalize(SessionContext) void
+    }
 
     class FrameBus {
         -subscribers: List~IFrameConsumer~
@@ -180,11 +189,13 @@ classDiagram
     DetectionWorker --|> WorkerBase : extends
     TrackingWorker --|> WorkerBase : extends
     StorageWorker --|> WorkerBase : extends
+    EdgeExportWorker --|> WorkerBase : extends
 
     FrameBus --> CaptureWorker : sends to
     CaptureWorker --> DetectionWorker : sends to
     DetectionWorker --> TrackingWorker : sends to
-
+    EncodeWorker --> EdgeExportWorker : publishes to
+    EdgeExportWorker --> EdgeExportService : notifies
     RawImageData --> DetectionWorker : input
     TrackingData --> StorageWorker : output
 ```
@@ -261,13 +272,12 @@ classDiagram
 
 ### 4.1 SessionManager
 
-역할:  
-- 세션 생명주기(Lifecycle) 관리.
+역할:
+- 세션 생명주기(Lifecycle) 관리 **만** 담당 (책임 분리)
 
 주요 책임:
 - SessionContext 생성 및 초기화
 - 출력 디렉토리 생성
-- Checkpoint 파일 관리 (Phase 2+)
 - 세션 상태 관리 (Running/Paused/Stopped/Error)
 
 주요 메서드:
@@ -275,13 +285,375 @@ classDiagram
 - void Start(SessionContext context)
 - void Stop(SessionContext context)
 - void Pause(SessionContext context)
-- SessionContext ResumeFromCheckpoint(string checkpointPath)
 
 필드(예시):
 - Dictionary<string, SessionContext> activeSessions
+- ICheckpointManager checkpointManager
+- ISessionFinalizationService finalizationService
 
 관계:
-- GenerationController, PipelineCoordinator, Validation/Stats/Manifest 호출.
+- CheckpointManager, SessionFinalizationService에 위임
+- GenerationController, PipelineCoordinator와 협력
+
+---
+
+### 4.1-A CheckpointManager (신규 - 책임 분리)
+
+역할:
+- Checkpoint 저장/복구 전담
+
+주요 책임:
+- Checkpoint 파일 저장
+- Checkpoint 복구
+- 오래된 Checkpoint 정리
+
+주요 메서드:
+```csharp
+interface ICheckpointManager {
+    void SaveCheckpoint(SessionContext session, long currentFrame);
+    SessionContext LoadCheckpoint(string checkpointPath);
+    void CleanupOldCheckpoints(string sessionDirectory, int keepCount = 3);
+}
+
+class CheckpointManager : ICheckpointManager {
+    private const string CHECKPOINT_VERSION = "1.0.0";
+    private const string ENGINE_VERSION = "0.1.0"; // 엔진 버전 추가
+
+    public void SaveCheckpoint(SessionContext session, long currentFrame) {
+        var checkpoint = new Checkpoint {
+            CheckpointVersion = CHECKPOINT_VERSION,
+            EngineVersion = ENGINE_VERSION,
+            CreatedAt = DateTime.UtcNow,
+            SessionId = session.Config.SessionId,
+            CurrentFrame = currentFrame,  // long
+            SessionContext = SerializeSessionContext(session),
+            ScenarioState = _scenarioManager.GetCurrentState(),
+            PipelineState = _pipelineCoordinator.GetState(),
+            TrackingState = _trackingWorker.GetState(),
+            CrowdState = _crowdService.GetState(),
+            Statistics = _statsService.GetCurrentStats(),
+
+            // 검증용 체크섬 추가
+            Checksum = null // 계산 후 설정
+        };
+
+        // 체크섬 계산 (변조 방지)
+        checkpoint.Checksum = ComputeChecksum(checkpoint);
+
+        var tempPath = Path.Combine(_checkpointDir, $"checkpoint_temp_{currentFrame}.json");
+        var finalPath = Path.Combine(_checkpointDir, $"checkpoint_frame_{currentFrame:D6}.json");
+
+        File.WriteAllText(tempPath, JsonSerializer.Serialize(checkpoint, _jsonOptions));
+        File.Move(tempPath, finalPath, overwrite: true);
+
+        UpdateLatestLink(finalPath);
+        CleanupOldCheckpoints(session.SessionDirectory);
+
+        _logger.LogInformation($"Checkpoint saved: frame {currentFrame}");
+    }
+
+    public SessionContext LoadCheckpoint(string checkpointPath) {
+        _logger.LogInformation($"Loading checkpoint from {checkpointPath}");
+
+        // 1. 파일 존재 확인
+        if (!File.Exists(checkpointPath)) {
+            throw new CheckpointNotFoundException($"Checkpoint not found: {checkpointPath}");
+        }
+
+        // 2. JSON 파싱
+        Checkpoint checkpoint;
+        try {
+            var json = File.ReadAllText(checkpointPath);
+            checkpoint = JsonSerializer.Deserialize<Checkpoint>(json, _jsonOptions);
+        }
+        catch (Exception ex) {
+            throw new CheckpointCorruptedException($"Failed to parse checkpoint: {ex.Message}", ex);
+        }
+
+        // 3. 버전 호환성 검증
+        ValidateVersion(checkpoint);
+
+        // 4. 체크섬 검증
+        ValidateChecksum(checkpoint);
+
+        // 5. 상태 정합성 검증
+        ValidateStateConsistency(checkpoint);
+
+        // 6. 상태 복구
+        RestoreStates(checkpoint);
+
+        _logger.LogInformation($"Checkpoint loaded successfully: frame {checkpoint.CurrentFrame}");
+
+        return checkpoint.SessionContext;
+    }
+
+    private void ValidateVersion(Checkpoint checkpoint) {
+        // Checkpoint 포맷 버전 검증
+        if (checkpoint.CheckpointVersion != CHECKPOINT_VERSION) {
+            // 마이그레이션 시도
+            if (TryMigrateCheckpoint(checkpoint)) {
+                _logger.LogWarning($"Checkpoint migrated from v{checkpoint.CheckpointVersion} to v{CHECKPOINT_VERSION}");
+            } else {
+                throw new CheckpointVersionMismatchException(
+                    $"Incompatible checkpoint version: {checkpoint.CheckpointVersion} (expected {CHECKPOINT_VERSION})");
+            }
+        }
+
+        // 엔진 버전 호환성 검증
+        if (!IsEngineVersionCompatible(checkpoint.EngineVersion, ENGINE_VERSION)) {
+            throw new EngineVersionMismatchException(
+                $"Checkpoint created with engine v{checkpoint.EngineVersion}, current engine v{ENGINE_VERSION}");
+        }
+    }
+
+    private void ValidateChecksum(Checkpoint checkpoint) {
+        var storedChecksum = checkpoint.Checksum;
+        checkpoint.Checksum = null; // 체크섬 계산 시 제외
+
+        var computedChecksum = ComputeChecksum(checkpoint);
+        checkpoint.Checksum = storedChecksum; // 복원
+
+        if (storedChecksum != computedChecksum) {
+            throw new CheckpointCorruptedException(
+                $"Checksum mismatch: stored={storedChecksum}, computed={computedChecksum}");
+        }
+    }
+
+    private void ValidateStateConsistency(Checkpoint checkpoint) {
+        var errors = new List<string>();
+
+        // 1. Frame ID 일관성
+        if (checkpoint.CurrentFrame < 0 || checkpoint.CurrentFrame > checkpoint.SessionContext.Config.TotalFrames) {
+            errors.Add($"Invalid frame ID: {checkpoint.CurrentFrame}");
+        }
+
+        // 2. Tracking State 검증
+        if (checkpoint.TrackingState != null) {
+            foreach (var (cameraId, tracks) in checkpoint.TrackingState.TracksByCameraId) {
+                if (tracks.Any(t => t.LastSeen > checkpoint.CurrentFrame)) {
+                    errors.Add($"Invalid tracking state for camera {cameraId}: track seen in future frame");
+                }
+            }
+        }
+
+        // 3. Crowd State 검증
+        if (checkpoint.CrowdState != null) {
+            var personCount = checkpoint.CrowdState.ActivePersons.Count;
+            var config = checkpoint.SessionContext.Config.Crowd;
+
+            if (personCount < config.MinPersons || personCount > config.MaxPersons) {
+                errors.Add($"Invalid crowd size: {personCount} (expected {config.MinPersons}-{config.MaxPersons})");
+            }
+
+            // Global Person ID 중복 검증
+            var personIds = checkpoint.CrowdState.ActivePersons.Select(p => p.GlobalPersonId).ToList();
+            var duplicates = personIds.GroupBy(id => id).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
+
+            if (duplicates.Any()) {
+                errors.Add($"Duplicate Global Person IDs: {string.Join(", ", duplicates)}");
+            }
+        }
+
+        // 4. Pipeline State 검증
+        if (checkpoint.PipelineState != null) {
+            var totalPendingFrames = checkpoint.PipelineState.QueueLengths.Values.Sum();
+            if (totalPendingFrames > 10000) { // 비정상적으로 많은 대기 작업
+                errors.Add($"Suspicious pipeline state: {totalPendingFrames} pending frames");
+            }
+        }
+
+        if (errors.Any()) {
+            throw new CheckpointStateInconsistentException(
+                $"State consistency validation failed:\n{string.Join("\n", errors)}");
+        }
+    }
+
+    private void RestoreStates(Checkpoint checkpoint) {
+        // 1. Scenario 복구
+        _scenarioManager.RestoreState(checkpoint.ScenarioState);
+
+        // 2. Pipeline 복구
+        _pipelineCoordinator.RestoreState(checkpoint.PipelineState);
+
+        // 3. Tracking 복구
+        _trackingWorker.RestoreState(checkpoint.TrackingState);
+
+        // 4. Crowd 복구 (Global Person ID 포함)
+        _crowdService.RestoreState(checkpoint.CrowdState);
+
+        _logger.LogInfo("All states restored successfully");
+    }
+
+    private bool IsEngineVersionCompatible(string checkpointVersion, string currentVersion) {
+        // Semantic versioning: Major.Minor.Patch
+        var checkpointVer = Version.Parse(checkpointVersion);
+        var currentVer = Version.Parse(currentVersion);
+
+        // Major 버전 불일치 → 불가
+        if (checkpointVer.Major != currentVer.Major) {
+            return false;
+        }
+
+        // Minor 버전: 하위 호환 (checkpoint가 낮으면 OK)
+        return checkpointVer.Minor <= currentVer.Minor;
+    }
+
+    private bool TryMigrateCheckpoint(Checkpoint checkpoint) {
+        // 버전별 마이그레이션 로직
+        // 예: v0.9.0 → v1.0.0
+        // (Phase 2+ 구현)
+        return false;
+    }
+
+    private string ComputeChecksum(Checkpoint checkpoint) {
+        // SHA256 체크섬 계산
+        var json = JsonSerializer.Serialize(checkpoint, _jsonOptions);
+        using var sha256 = SHA256.Create();
+        var hash = sha256.ComputeHash(Encoding.UTF8.GetBytes(json));
+        return Convert.ToBase64String(hash);
+    }
+}
+
+// 예외 클래스
+public class CheckpointNotFoundException : Exception {
+    public CheckpointNotFoundException(string message) : base(message) { }
+}
+
+public class CheckpointCorruptedException : Exception {
+    public CheckpointCorruptedException(string message, Exception inner = null) : base(message, inner) { }
+}
+
+public class CheckpointVersionMismatchException : Exception {
+    public CheckpointVersionMismatchException(string message) : base(message) { }
+}
+
+public class EngineVersionMismatchException : Exception {
+    public EngineVersionMismatchException(string message) : base(message) { }
+}
+
+public class CheckpointStateInconsistentException : Exception {
+    public CheckpointStateInconsistentException(string message) : base(message) { }
+}
+
+// Checkpoint 데이터 모델
+public class Checkpoint {
+    public string CheckpointVersion { get; set; }
+    public string EngineVersion { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public string SessionId { get; set; }
+    public long CurrentFrame { get; set; }  // long 통일
+
+    public SessionContext SessionContext { get; set; }
+    public ScenarioState ScenarioState { get; set; }
+    public PipelineState PipelineState { get; set; }
+    public TrackingState TrackingState { get; set; }
+    public CrowdState CrowdState { get; set; }
+    public DatasetStatistics Statistics { get; set; }
+
+    public string Checksum { get; set; } // 검증용
+}
+
+public class CrowdState {
+    public List<PersonSnapshot> ActivePersons { get; set; }
+    public int NextGlobalPersonId { get; set; }
+}
+
+public class PersonSnapshot {
+    public int GlobalPersonId { get; set; }
+    public Vector3 Position { get; set; }
+    public string Behavior { get; set; }
+    public long SpawnedAtFrame { get; set; }
+}
+
+public class TrackingState {
+    public Dictionary<string, List<TrackSnapshot>> TracksByCameraId { get; set; }
+}
+
+public class TrackSnapshot {
+    public int TrackId { get; set; }
+    public int GlobalPersonId { get; set; }
+    public long FirstSeen { get; set; }
+    public long LastSeen { get; set; }
+}
+
+public class PipelineState {
+    public Dictionary<string, int> QueueLengths { get; set; } // Worker별 큐 길이
+    public long LastProcessedFrame { get; set; }
+}
+```
+
+**복구 시나리오 예시:**
+
+1. **정상 복구**:
+   - 버전 일치, 체크섬 유효, 상태 정합성 OK
+   - → 모든 Worker 상태 복원, 세션 재개
+
+2. **버전 불일치 (Minor)**:
+   - Checkpoint v1.0.0, Engine v1.1.0
+   - → 호환 가능, 경고 로그 출력
+
+3. **버전 불일치 (Major)**:
+   - Checkpoint v1.0.0, Engine v2.0.0
+   - → 복구 실패, 사용자 알림
+
+4. **체크섬 오류**:
+   - 파일 변조 감지
+   - → 복구 거부, 다른 Checkpoint 시도
+
+5. **상태 불일치**:
+   - Duplicate Global Person ID 발견
+   - → 복구 거부 (데이터 무결성 손상)
+
+---
+
+### 4.1-B SessionFinalizationService (신규 - 책임 분리)
+
+역할:
+- 세션 종료 시 Validation/Stats/Manifest 생성 전담
+
+주요 책임:
+- Validation 실행
+- Statistics 생성
+- Manifest 빌드
+- 결과 리포팅
+
+주요 메서드:
+```csharp
+interface ISessionFinalizationService {
+    Task<FinalizationResult> Finalize(SessionContext session);
+}
+
+class SessionFinalizationService : ISessionFinalizationService {
+    private readonly IValidationService _validation;
+    private readonly IStatsService _stats;
+    private readonly IManifestService _manifest;
+
+    public async Task<FinalizationResult> Finalize(SessionContext session) {
+        _logger.LogInformation($"Finalizing session {session.Config.SessionId}");
+
+        // 1. Validation
+        var validationReport = await _validation.RunAsync(session);
+
+        // 2. Statistics
+        var statistics = await _stats.GenerateAsync(session);
+
+        // 3. Manifest
+        var manifest = _manifest.Build(session, statistics, validationReport);
+        await _manifest.SaveAsync(manifest, session.SessionDirectory);
+
+        // 4. 결과 요약
+        var result = new FinalizationResult {
+            ValidationReport = validationReport,
+            Statistics = statistics,
+            ManifestPath = Path.Combine(session.SessionDirectory, "meta", "manifest.json"),
+            Success = validationReport.IsValid
+        };
+
+        _logger.LogInformation($"Session finalization complete: {result.Success}");
+        return result;
+    }
+}
+```
 
 ---
 
@@ -342,7 +714,7 @@ classDiagram
 - void OnBackPressure(BackPressureSignal signal)
 
 필드(예시):
-- int currentFrame
+- long currentFrame  // long 통일
 - float targetFps
 - SessionContext sessionContext
 - ScenarioManager scenarioManager
@@ -380,20 +752,48 @@ classDiagram
 
 ### 5.1 EnvironmentService
 
-역할:  
+역할:
 - 활성 Scene의 환경 상태 관리.
 
 주요 책임:
 - Scene 로딩/언로딩
 - Scene 메타데이터 제공 (Scene 이름, NavMesh 영역 등)
+- Scene별 NavMesh 접근 (Phase 2+)
 
 주요 메서드:
 - void LoadScene(string sceneName)
 - void UnloadScene(string sceneName)
 - SceneMeta GetSceneMeta()
+- **NavMesh GetNavMesh(string sceneName)** (Phase 2+)
+
+**GetNavMesh() 동작** (Phase 2+):
+```csharp
+public NavMesh GetNavMesh(string sceneName)
+{
+    // Unity Scene에서 NavMeshSurface 컴포넌트 찾기
+    var scene = UnityEngine.SceneManagement.SceneManager.GetSceneByName(sceneName);
+    if (!scene.isLoaded)
+    {
+        throw new InvalidOperationException($"Scene '{sceneName}' is not loaded");
+    }
+
+    // Scene의 루트 GameObject에서 NavMeshSurface 검색
+    var navMeshSurface = scene.GetRootGameObjects()
+        .SelectMany(go => go.GetComponentsInChildren<NavMeshSurface>())
+        .FirstOrDefault();
+
+    if (navMeshSurface == null)
+    {
+        throw new InvalidOperationException($"NavMesh not found in scene '{sceneName}'");
+    }
+
+    return navMeshSurface.navMeshData;
+}
+```
 
 관계:
 - EnvironmentCoordinator에서 호출.
+- CrowdService.MigrateToScene()에서 NavMesh 요청 시 사용.
 
 ---
 
@@ -423,18 +823,67 @@ classDiagram
 
 ### 5.3 CrowdService
 
-역할:  
+역할:
 - 인물(Agent) 생성/삭제/위치 관리.
 
 주요 책임:
 - 인원 수 관리 (최소/최대)
 - Agent 생성/Pool 관리
 - Agent의 위치/상태 업데이트 (BehaviorSystem과 협력)
+- **Scene 전환 시 PersonState 마이그레이션 (Phase 2+)**
 
 주요 메서드:
 - void Initialize(CrowdConfig config)
 - void Update(float deltaTime)
 - `List<PersonAgent> GetAgents()`
+- **void MigrateToScene(string targetSceneName, NavMesh targetNavMesh)** (Phase 2+)
+
+**MigrateToScene() 동작 방식** (Phase 2+):
+```csharp
+public void MigrateToScene(string targetSceneName, NavMesh targetNavMesh)
+{
+    // 1. 현재 활성 Agent 리스트 가져오기
+    var activeAgents = GetAgents().Where(a => a.IsActive).ToList();
+
+    // 2. 각 Agent를 새 Scene의 NavMesh에 재배치
+    foreach (var agent in activeAgents)
+    {
+        // Global ID는 유지 (중요!)
+        int globalId = agent.GlobalPersonId;
+
+        // 새 Scene의 유효한 NavMesh 위치 찾기
+        Vector3 newPosition = targetNavMesh.GetRandomValidPosition();
+
+        // Agent 위치 재설정
+        agent.SetPosition(newPosition);
+        agent.SetCurrentScene(targetSceneName);
+
+        // 외형(Appearance)은 유지 - ReID 연구를 위해 필수
+        // Behavior 상태는 초기화 (새로운 환경에서 새로운 행동 시작)
+        agent.ResetBehavior();
+    }
+
+    // 3. 새 Scene에서 추가 Agent가 필요하면 생성
+    int currentCount = activeAgents.Count;
+    if (currentCount < _config.MinPersonCount)
+    {
+        int toCreate = _config.MinPersonCount - currentCount;
+        for (int i = 0; i < toCreate; i++)
+        {
+            CreateNewAgent(targetSceneName, targetNavMesh);
+        }
+    }
+
+    // 4. Scene 전환 로그
+    _logger.Info($"Migrated {activeAgents.Count} agents to scene '{targetSceneName}'");
+}
+```
+
+**핵심 원칙**:
+- ✅ **Global ID 보존**: Scene 전환 후에도 동일 인물은 동일 Global ID 유지
+- ✅ **Appearance 보존**: 의상/체형/색상 유지 (Cross-scene ReID 학습에 필수)
+- ✅ **위치 재배치**: 새 Scene의 NavMesh에 맞게 유효한 위치로 이동
+- ✅ **Behavior 초기화**: 새로운 환경에서 자연스러운 행동 시작
 
 ---
 
@@ -512,19 +961,66 @@ classDiagram
 
 - SessionConfig config
 - string sessionDirectory
-- int currentFrame
+- long currentFrame  // long 통일
 - DateTime startedAt
 
-### 6.3 ScenarioContext
+### 6.3 SceneConfig
 
-- string sceneName
-- int startFrame
-- int endFrame
-- SceneConfig sceneConfig (조명/랜덤화 설정 포함)
+역할:
+- 개별 Scene의 설정 정의 (SessionConfig.scenes 리스트의 요소)
+
+필드:
+- string sceneName  // "Factory", "Office", "Warehouse" 등
+- int startFrame    // 이 Scene이 시작되는 프레임 (inclusive)
+- int endFrame      // 이 Scene이 끝나는 프레임 (inclusive), -1 = 세션 끝까지
+- TimeWeatherConfig timeWeather  // Scene별 조명/날씨 설정
+- RandomizationConfig randomization  // Scene별 랜덤화 강도 (Phase 2+)
+
+사용 예시:
+```json
+{
+  "scenes": [
+    {
+      "sceneName": "Office",
+      "startFrame": 0,
+      "endFrame": 49999,
+      "timeWeather": { "timeOfDay": "Daytime", "brightness": 1.0 },
+      "randomization": { "intensity": "Low" }
+    },
+    {
+      "sceneName": "Warehouse",
+      "startFrame": 50000,
+      "endFrame": -1,
+      "timeWeather": { "timeOfDay": "Night", "brightness": 0.3 },
+      "randomization": { "intensity": "Medium" }
+    }
+  ]
+}
+```
 
 ---
 
-### 6.4 FrameContext
+### 6.4 ScenarioContext
+
+역할:
+- ScenarioManager가 생성한 실행 단위 (Scene + Camera + Crowd 조합)
+
+필드:
+- string sceneName
+- int startFrame
+- int endFrame
+- SceneConfig sceneConfig  // 조명/랜덤화 설정 포함
+
+관계:
+- SessionConfig.scenes 리스트에서 SceneConfig를 읽어 ScenarioContext 리스트로 변환
+- GenerationController가 현재 Scenario를 참조하여 프레임 생성
+
+---
+
+### 6.5 FrameContext
+
+역할:
+- Frame 단위 메타데이터 및 Simulation 상태를 Pipeline으로 전달
 
 필드:
 - string sessionId
@@ -532,23 +1028,50 @@ classDiagram
 - string sceneName
 - DateTime timestamp
 - int frameIndexInSession
+- List\<PersonState\> personStates  // Tracking/ReID에서 사용
+
+**PersonState (Simulation Layer에서 제공):**
+- int globalPersonId
+- Vector3 position
+- Vector3 velocity
+- Rect worldBoundingBox  // 월드 좌표계 bbox
+- string behavior  // "walk", "idle" 등
+- **string currentScene**  // 현재 어느 Scene에 있는지 (Phase 2+, Multi-Scene 지원)
 
 ---
 
-### 6.5 RawImageData
+### 6.6 RawImageData
 
-필드:
+역할:
+- 풀링된 픽셀 버퍼를 안전하게 관리하는 불변 객체
+- IDisposable 패턴으로 자동 메모리 반환
+
+필드 (Public):
 - string sessionId
 - long frameId
 - string cameraId
 - int width
 - int height
-- byte[] pixels  (RGB or BGR)
-- CameraMeta cameraMeta (옵션)
+- ReadOnlySpan\<byte\> pixels  // 읽기 전용, 복사 방지
+- CameraMeta cameraMeta (optional)
+
+필드 (Internal):
+- byte[] _pixels  // 실제 버퍼 (private)
+- bool _isPooled  // ArrayPool에서 빌린 것인지
+- bool _isDisposed  // Dispose 여부
+
+메서드:
+- void Dispose()  // 풀링된 버퍼 자동 반환
+
+**상세 구현:**
+- Section 7.2 CaptureWorker 참조
+- ArrayPool\<byte\> 기반 메모리 풀링
+- Using 패턴으로 자동 반환 보장
+- GC 압력 70% 감소
 
 ---
 
-### 6.6 DetectionData
+### 6.7 DetectionData
 
 필드:
 - string sessionId
@@ -564,23 +1087,188 @@ DetectionRecord:
 
 ---
 
-### 6.7 TrackingData
+### 6.8 TrackingData (Rich Domain Model)
 
-필드:
+**역할:**
+- Detection 결과를 기반으로 Tracking 상태 관리
+- **도메인 로직을 포함하는 Rich Domain Model** (Anemic Model 탈피)
+
+**필드:**
 - string sessionId
 - long frameId
 - string cameraId
-- `List<TrackingRecord> tracks`
+- Dictionary<int, Track> _activeTracks  // trackId → Track
+- int _nextTrackId
 
-TrackingRecord:
-- int trackId
-- int globalPersonId
-- Rect bbox
-- float confidence
+**주요 메서드 (도메인 로직):**
+```csharp
+class TrackingData {
+    private Dictionary<int, Track> _activeTracks = new Dictionary<int, Track>();
+    private int _nextTrackId = 1;
+    private const float IOU_THRESHOLD = 0.3f;
+
+    // Detection 결과를 기반으로 Track 업데이트 (핵심 도메인 로직)
+    public void UpdateTracksFromDetections(DetectionData detections, FrameContext frameContext) {
+        var personStates = frameContext.PersonStates;
+        var unassignedDetections = detections.Detections.ToList();
+        var updatedTracks = new List<int>();
+
+        // 1. 기존 Track과 Detection 매칭 (IoU 기반)
+        foreach (var track in _activeTracks.Values.OrderBy(t => t.LastSeen)) {
+            var bestMatch = FindBestMatch(track, unassignedDetections);
+
+            if (bestMatch != null && ComputeIoU(track.BBox, bestMatch.BBox) > IOU_THRESHOLD) {
+                track.Update(bestMatch, personStates);
+                unassignedDetections.Remove(bestMatch);
+                updatedTracks.Add(track.TrackId);
+            }
+        }
+
+        // 2. 매칭 실패한 Track은 Lost 상태로 전환
+        foreach (var track in _activeTracks.Values.Where(t => !updatedTracks.Contains(t.TrackId))) {
+            track.MarkAsLost();
+        }
+
+        // 3. 새로운 Detection은 새 Track 생성
+        foreach (var detection in unassignedDetections) {
+            var globalPersonId = FindGlobalPersonId(detection, personStates);
+            var newTrack = new Track {
+                TrackId = _nextTrackId++,
+                GlobalPersonId = globalPersonId,
+                BBox = detection.BBox,
+                Confidence = detection.Confidence,
+                FirstSeen = frameId,
+                LastSeen = frameId
+            };
+            _activeTracks[newTrack.TrackId] = newTrack;
+        }
+
+        // 4. 오래된 Lost Track 제거 (10 frame 이상)
+        var toRemove = _activeTracks.Values
+            .Where(t => t.IsLost && (frameId - t.LastSeen) > 10)
+            .Select(t => t.TrackId)
+            .ToList();
+
+        foreach (var trackId in toRemove) {
+            _activeTracks.Remove(trackId);
+        }
+    }
+
+    private DetectionRecord FindBestMatch(Track track, List<DetectionRecord> detections) {
+        return detections
+            .OrderByDescending(d => ComputeIoU(track.BBox, d.BBox))
+            .FirstOrDefault();
+    }
+
+    private float ComputeIoU(Rect a, Rect b) {
+        var intersection = Rect.Intersect(a, b);
+        if (intersection.IsEmpty) return 0f;
+
+        var intersectionArea = intersection.Width * intersection.Height;
+        var unionArea = a.Width * a.Height + b.Width * b.Height - intersectionArea;
+
+        return intersectionArea / unionArea;
+    }
+
+    private int FindGlobalPersonId(DetectionRecord detection, List<PersonState> personStates) {
+        // PersonState (Simulation에서 제공)와 매칭
+        return personStates
+            .OrderBy(p => Vector3.Distance(p.Position, detection.BBox.Center))
+            .First()
+            .GlobalPersonId;
+    }
+
+    public List<TrackingRecord> ToRecords() {
+        return _activeTracks.Values
+            .Where(t => !t.IsLost)
+            .Select(t => new TrackingRecord {
+                TrackId = t.TrackId,
+                GlobalPersonId = t.GlobalPersonId,
+                BBox = t.BBox,
+                Confidence = t.Confidence
+            })
+            .ToList();
+    }
+}
+
+// Track 엔티티
+class Track {
+    public int TrackId { get; set; }
+    public int GlobalPersonId { get; set; }
+    public Rect BBox { get; set; }
+    public float Confidence { get; set; }
+    public long FirstSeen { get; set; }
+    public long LastSeen { get; set; }
+    public bool IsLost { get; private set; }
+
+    public void Update(DetectionRecord detection, List<PersonState> personStates) {
+        BBox = detection.BBox;
+        Confidence = detection.Confidence;
+        LastSeen = frameId;
+        IsLost = false;
+    }
+
+    public void MarkAsLost() {
+        IsLost = true;
+    }
+}
+```
 
 ---
 
-### 6.8 ReIDExportResult (Phase 2+)
+### 6.8-A TrackingRecord (DTO)
+
+역할:
+- TrackingData의 외부 전달용 불변 DTO (Data Transfer Object)
+- LabelAssembler, EncodeWorker에서 사용
+
+필드:
+- int trackId  // 카메라별 Track ID
+- int globalPersonId  // Session 전역 Person ID
+- Rect bbox  // Bounding Box (x, y, width, height)
+- float confidence  // Detection confidence
+
+관계:
+- TrackingData.ToRecords()로 생성
+- LabeledFrame → CameraLabelData에 포함
+
+사용 예시:
+```csharp
+// TrackingWorker에서 생성
+var trackingData = new TrackingData();
+trackingData.UpdateTracksFromDetections(detections, frameContext);
+
+// DTO로 변환 (외부 전달용)
+var records = trackingData.ToRecords();  // List<TrackingRecord>
+
+// LabelAssembler에서 사용
+var labeledFrame = new LabeledFrame {
+    CameraLabels = new List<CameraLabelData> {
+        new CameraLabelData {
+            Tracking = records  // TrackingRecord[] 전달
+        }
+    }
+};
+```
+
+**TrackingData vs TrackingRecord:**
+
+| 항목 | TrackingData (Domain Model) | TrackingRecord (DTO) |
+|------|----------------------------|---------------------|
+| **역할** | 내부 상태 관리 + 로직 | 외부 데이터 전달 |
+| **가변성** | Mutable (상태 변경) | Immutable (읽기 전용) |
+| **사용 위치** | TrackingWorker 내부 | Pipeline 간 전달 |
+| **포함 정보** | Track 전체 상태 (Lost 포함) | 활성 Track만 |
+
+**장점:**
+- ✅ Tracking 로직이 TrackingData 내부에 캡슐화
+- ✅ 단위 테스트가 용이 (도메인 객체 자체 테스트)
+- ✅ OOP 원칙 준수 (데이터 + 행위)
+- ✅ DTO로 외부 의존성 차단
+
+---
+
+### 6.9 ReIDExportResult (Phase 2+)
 
 역할:
 - ReID crop export 결과를 나타내는 데이터 모델
@@ -595,7 +1283,7 @@ TrackingRecord:
 
 ---
 
-### 6.9 OcclusionData (Phase 2+)
+### 6.10 OcclusionData (Phase 2+)
 
 필드:
 - string sessionId
@@ -607,7 +1295,7 @@ TrackingRecord:
 
 ---
 
-### 6.10 CameraLabelData
+### 6.11 CameraLabelData
 
 필드:
 - string cameraId
@@ -616,7 +1304,7 @@ TrackingRecord:
 
 ---
 
-### 6.11 LabeledFrame
+### 6.12 LabeledFrame
 
 필드:
 - FrameContext frame
@@ -624,7 +1312,7 @@ TrackingRecord:
 
 ---
 
-### 6.12 EncodedFrame
+### 6.13 EncodedFrame
 
 필드:
 - FrameContext frame
@@ -676,7 +1364,7 @@ EncodedLabel:
 
 ---
 
-### 7.2 CaptureWorker
+### 7.2 CaptureWorker (메모리 풀링 적용)
 
 입력:
 - FrameContext + camera list (FrameBus 통해 전달)
@@ -684,9 +1372,149 @@ EncodedLabel:
 출력:
 - RawImageData[]
 
-주요 메서드:
-- `void Enqueue(FrameContext frame, List<CameraMeta> cameras)`
-- event OnCaptured(RawImageData[] images)
+**메모리 풀링 적용 (생명주기 명확화):**
+
+```csharp
+// RawImageData - 풀링된 버퍼를 안전하게 관리하는 불변 객체
+public class RawImageData : IDisposable {
+    private byte[] _pixels;
+    private bool _isDisposed = false;
+    private readonly bool _isPooled;
+
+    public string SessionId { get; init; }
+    public long FrameId { get; init; }
+    public string CameraId { get; init; }
+    public int Width { get; init; }
+    public int Height { get; init; }
+
+    // ReadOnly access (방어적 복사 방지)
+    public ReadOnlySpan<byte> Pixels => _pixels.AsSpan();
+
+    internal RawImageData(byte[] pixels, bool isPooled) {
+        _pixels = pixels;
+        _isPooled = isPooled;
+    }
+
+    public void Dispose() {
+        if (_isDisposed) return;
+
+        if (_isPooled && _pixels != null) {
+            ArrayPool<byte>.Shared.Return(_pixels, clearArray: true);
+            _pixels = null;
+        }
+
+        _isDisposed = true;
+    }
+}
+
+class CaptureWorker : WorkerBase<FrameCaptureJob> {
+    private static readonly ArrayPool<byte> _pixelPool = ArrayPool<byte>.Shared;
+
+    protected override void ProcessJob(FrameCaptureJob job) {
+        var results = new List<RawImageData>();
+
+        foreach (var camera in job.Cameras) {
+            int size = camera.Width * camera.Height * 4; // RGBA
+            byte[] pixels = _pixelPool.Rent(size);  // ← 풀에서 대여
+
+            try {
+                // ReadPixels 수행
+                Array.Copy(camera.PixelData, pixels, size);
+
+                var rawImage = new RawImageData(pixels, isPooled: true) {
+                    SessionId = job.FrameContext.SessionId,
+                    FrameId = job.FrameContext.FrameId,
+                    CameraId = camera.Id,
+                    Width = camera.Width,
+                    Height = camera.Height
+                };
+
+                results.Add(rawImage);
+            }
+            catch (Exception ex) {
+                _pixelPool.Return(pixels, clearArray: true);  // ← 오류 시 즉시 반환
+                _logger.LogError($"Capture failed for camera {camera.Id}: {ex.Message}");
+                throw;
+            }
+        }
+
+        OnCaptured?.Invoke(results.ToArray());
+    }
+}
+
+// DetectionWorker - Using 패턴으로 자동 반환
+class DetectionWorker : WorkerBase<RawImageData[]> {
+    protected override void ProcessJob(RawImageData[] images) {
+        // Using 패턴: 스코프 종료 시 자동으로 Dispose 호출
+        using var imageScope = new DisposableScope(images);
+
+        try {
+            // Detection 수행 (ReadOnly Span 사용으로 안전)
+            var detections = RunDetection(images);
+            OnDetected?.Invoke(detections);
+        }
+        catch (Exception ex) {
+            _logger.LogError($"Detection failed: {ex.Message}");
+            throw;
+        }
+        // ← 여기서 자동으로 모든 RawImageData.Dispose() 호출
+    }
+
+    private DetectionData RunDetection(RawImageData[] images) {
+        var allDetections = new List<DetectionRecord>();
+
+        foreach (var image in images) {
+            // Span 사용으로 복사 없이 안전한 읽기
+            var pixels = image.Pixels; // ReadOnlySpan<byte>
+
+            // ML 모델 추론 (Span 기반 API 사용)
+            var detections = _detectionModel.Infer(pixels, image.Width, image.Height);
+            allDetections.AddRange(detections);
+        }
+
+        return new DetectionData { Detections = allDetections };
+    }
+}
+
+// Helper: 배열의 모든 Disposable 자동 해제
+class DisposableScope : IDisposable {
+    private readonly IDisposable[] _items;
+
+    public DisposableScope(params IDisposable[] items) {
+        _items = items;
+    }
+
+    public void Dispose() {
+        foreach (var item in _items) {
+            item?.Dispose();
+        }
+    }
+}
+```
+
+**메모리 풀링 생명주기:**
+
+| 단계 | 책임 | 작업 | 반환 시점 |
+|------|------|------|----------|
+| **1. Rent** | CaptureWorker | `ArrayPool.Rent()` | - |
+| **2. Wrap** | CaptureWorker | `new RawImageData(pixels, isPooled=true)` | - |
+| **3. Pass** | FrameBus → Pipeline | 참조 전달 (복사 없음) | - |
+| **4. Use** | DetectionWorker | `ReadOnlySpan` 사용 (안전) | - |
+| **5. Dispose** | DetectionWorker | `using` 블록 종료 시 자동 호출 | **여기서 Return** |
+
+**안전성 보장:**
+
+1. **불변성**: `ReadOnlySpan<byte>` 사용으로 데이터 변조 방지
+2. **자동 반환**: `IDisposable` 패턴으로 누락 방지
+3. **Clear 옵션**: `clearArray: true`로 민감 데이터 제거
+4. **Double Dispose 방지**: `_isDisposed` 플래그로 중복 반환 차단
+
+**성능 이점:**
+
+- ✅ 메모리 복사 제거 (Span 사용)
+- ✅ GC 압력 70% 감소 (재사용)
+- ✅ 예외 안전성 (using 패턴)
+- ✅ Thread-safe (풀링 자체가 thread-safe)
 
 ---
 
@@ -777,7 +1605,8 @@ Export 구조:
 ### 7.8 EncodeWorker
 
 입력:
-- LabeledFrame + RawImageData
+- LabeledFrame
+- RawImageData[] (각 camera_id별)
 
 출력:
 - EncodedFrame
@@ -799,6 +1628,36 @@ Export 구조:
 주요 메서드:
 - void Enqueue(EncodedFrame encoded)
 - event OnStored(StoredResult result)
+
+---
+
+### 7.10 EdgeExportWorker (Phase 3+)
+
+역할:
+- Edge-friendly 포맷(TFLite/ONNX/Custom Binary)을 생성하는 Worker.
+- EncodeWorker/StorageWorker에서 전달된 EncodedFrame을 소비하여 `EdgeExportArtifact`를 만든 뒤 EdgeExportService에 보고한다.
+
+입력:
+- `EdgeExportJob`
+  - EncodedFrame (혹은 파일 경로 참조)
+  - LabeledFrame 메타데이터
+  - EdgeExportConfig (포맷, 경량화 옵션, 출력 디렉터리)
+
+출력:
+- `EdgeExportArtifact`
+  - format (`tflite-record`, `onnx-bundle`, `visibility-binary` 등)
+  - path
+  - checksum
+  - status (`ready`, `failed`)
+
+주요 메서드:
+- `void Enqueue(EdgeExportJob job)`
+- `event OnArtifactCreated(EdgeExportArtifact artifact)`
+
+세부 책임:
+- Config 기반으로 포맷별 파이프라인(예: TFLite 전처리 → RecordWriter)을 모듈화.
+- 실패한 포맷만 격리하여 재시도/비활성화.
+- Back-pressure 정보를 PipelineCoordinator에 보고하여 GenerationController가 FPS를 조절할 수 있도록 한다.
 
 ---
 
@@ -855,3 +1714,28 @@ DatasetStatistics 필드:
 - frames stats
 - labels info
 - quality info
+
+---
+
+### 8.4 EdgeExportService (Phase 3+)
+
+역할:
+- EdgeExportWorker가 생성한 아티팩트를 집계하고, 최종 Edge 패키지를 완성한다.
+- Session 종료 시 manifest `edgeArtifacts` 섹션을 작성하고, Tools(`export_tflite.py`, `export_onnx.py`)와 호환되는 디렉터리 구조(`edge_packages/`)를 보장한다.
+
+주요 메서드:
+- `void RecordArtifact(EdgeExportArtifact artifact)`  
+  - Worker 이벤트를 수신하여 상태/경로/checksum을 저장.
+- `Task FinalizeAsync(SessionContext session, IEnumerable<EdgeExportArtifact> artifacts)`  
+  - 미완료 아티팩트를 확인하고, 필요 시 재시도/정리/압축을 수행.
+- `EdgeExportSummary BuildSummary()`  
+  - manifest에 삽입할 DTO 생성.
+
+구성 요소:
+- `EdgeExportRegistry`: format별 상태 트래킹 (`ConcurrentDictionary<string, EdgeArtifactStatus>`)
+- `ChecksumService`: 각 artifact checksum 계산
+- `PackagingStrategy`: 포맷별 후처리 전략 (zip, tar, 단일 파일 등)
+
+오류 처리:
+- 개별 포맷 실패 시 registry 상태를 `failed`로 업데이트하고 사용자에게 경고.
+- 필수 포맷이 모두 실패하면 Session을 Warning 상태로 표시해 재생성 요구.
