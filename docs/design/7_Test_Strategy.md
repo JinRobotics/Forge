@@ -96,6 +96,11 @@ public void CreateSession_DuplicateSessionId_ThrowsException()
 - [ ] DetectionWorker: bbox 생성 로직
 - [ ] TrackingWorker: track ID 할당
 - [ ] StorageWorker: 파일 쓰기
+- [ ] config 저장 시 민감 필드(API Key/토큰/사용자 경로) 필터링/마스킹 확인
+- [ ] `/status` 계약/인증 테스트 (HTTP 게이트웨이 모드 활성 시): 인증 누락 시 401, `queueDepthSummary` 존재, 내부 경로/사용자명 미포함
+- [ ] `IFrameRatePolicy` 계약 테스트: BackPressureLevel별 Decision(Generate/Skip/Pause) 매핑, 정책 선택 config 반영 여부
+- [ ] `ISimulationGateway` 계약 테스트: Initialize/GenerateFrame/GetActiveCameras가 Mock/Unity/HTTP 구현에서 동일 시그니처로 동작하는지
+- [ ] 이동형 카메라 pose 직렬화/전파: FrameContext → FramePipelineContext → ManifestWriter까지 pose 정보가 손실되지 않는지 확인
 
 ### 3.2 통합 테스트 (Integration Tests)
 
@@ -159,6 +164,13 @@ public async Task Pipeline_FullFlow_GeneratesValidOutput()
 - [ ] Session 전체 라이프사이클 (Init → Run → Stop)
 - [ ] Scene 전환 시 카메라 재설정
 - [ ] Validation/Stats/Manifest 생성
+- [ ] Checkpoint 저장/복구: lastStoredFrame 기준 재개, 전 카메라/라벨 누락 검증 경고 확인 (Phase 2+ 옵션. Phase 1은 수동/비필수)
+- [ ] 이동형 카메라 세션:
+  - pose 파일 생성(`camera_poses/`), manifest에 poseFile 경로/유형(static/mobile) 표시
+  - pose CSV row 수 = frame 수 ±1% 이내 확인
+  - waypoint 대비 위치 편차 ≤ 0.15m, 회전 편차 ≤ 3° 검증
+  - timestamp 단조 증가 및 샘플링 주기(설정값 ±10%) 확인
+  - Validation 리포트에 `poseMissingCount`, `poseDriftWarning` 필드 노출
 
 ### 3.3 End-to-End 테스트 (E2E Tests)
 
@@ -498,9 +510,399 @@ public void Example_Test()
 
 ---
 
-## 10. 참고 자료
+## 10. Unity 의존성 Mock 전략
+
+### 10.1 문제점
+
+Unity 의존성으로 인한 테스트 어려움:
+- Unity 타입 (Vector3, Quaternion 등)은 Unity 런타임 없이 인스턴스화 불가
+- MonoBehaviour는 `new` 연산자로 생성 불가
+- Unity Editor에서만 실행 가능한 코드가 많음
+
+### 10.2 해결 전략
+
+#### **전략 1: Adapter 패턴 (권장)**
+
+Unity 타입을 직접 사용하지 않고, 인터페이스로 추상화
+
+**예시: ISimulationGateway**
+```csharp
+// Orchestration Layer (Unity 독립적)
+public interface ISimulationGateway
+{
+    Task InitializeAsync(SessionConfig config);
+    Task<FrameContext> GenerateFrameAsync(int frameId);
+    void Shutdown();
+}
+
+// Simulation Layer (Unity 의존)
+public class InProcessSimulationGateway : MonoBehaviour, ISimulationGateway
+{
+    private readonly CrowdService _crowdService;  // Unity MonoBehaviour
+
+    public async Task<FrameContext> GenerateFrameAsync(int frameId)
+    {
+        // Unity API 호출
+        var personStates = _crowdService.GetAllPersonStates();
+        return new FrameContext { FrameId = frameId, PersonStates = personStates };
+    }
+}
+
+// 테스트용 Mock
+public class MockSimulationGateway : ISimulationGateway
+{
+    public Task<FrameContext> GenerateFrameAsync(int frameId)
+    {
+        // Unity 없이 테스트 데이터 반환
+        return Task.FromResult(new FrameContext
+        {
+            FrameId = frameId,
+            PersonStates = new List<PersonState>
+            {
+                new() { GlobalPersonId = 1, Position = new float[] {0, 0, 0} }
+            }
+        });
+    }
+}
+```
+
+**테스트 예시**:
+```csharp
+[Fact]
+public async Task GenerationController_GenerateFrame_CallsSimulationGateway()
+{
+    // Arrange
+    var mockGateway = new MockSimulationGateway();
+    var controller = new GenerationController(mockGateway);
+
+    // Act
+    await controller.GenerateFrameAsync(0);
+
+    // Assert
+    // Unity 없이 순수 C# 로직만 테스트
+}
+```
+
+---
+
+#### **전략 2: Unity Test Framework (통합 테스트용)**
+
+Unity Editor 내에서 실행되는 테스트
+
+**설치**:
+```bash
+# Unity Package Manager에서 설치
+com.unity.test-framework
+```
+
+**예시**:
+```csharp
+// tests/unity/CrowdServiceTests.cs (Unity Editor에서 실행)
+using UnityEngine;
+using UnityEngine.TestTools;
+using NUnit.Framework;
+using System.Collections;
+
+public class CrowdServiceTests
+{
+    [UnityTest]
+    public IEnumerator CrowdService_SpawnPerson_CreatesGameObject()
+    {
+        // Arrange
+        var crowdService = new GameObject().AddComponent<CrowdService>();
+
+        // Act
+        crowdService.SpawnPerson(globalPersonId: 1);
+        yield return null;  // 1 프레임 대기
+
+        // Assert
+        var agents = Object.FindObjectsOfType<PersonAgent>();
+        Assert.AreEqual(1, agents.Length);
+    }
+}
+```
+
+**실행 방법**:
+```bash
+# Unity Editor: Window > General > Test Runner
+# 또는 CLI:
+unity-editor -runTests -testPlatform PlayMode -testResults results.xml
+```
+
+---
+
+#### **전략 3: 데이터 구조 Unity 독립성 보장**
+
+**원칙**: 데이터 모델은 Unity 타입 사용 금지
+
+❌ **Bad**:
+```csharp
+public class PersonState
+{
+    public Vector3 Position { get; set; }  // Unity 타입!
+    public Quaternion Rotation { get; set; }
+}
+```
+
+✅ **Good**:
+```csharp
+public class PersonState
+{
+    public float[] Position { get; set; }  // [x, y, z]
+    public float[] Rotation { get; set; }  // [pitch, yaw, roll]
+}
+```
+
+**이점**:
+- Unity 없이 데이터 모델 테스트 가능
+- JSON 직렬화 문제 없음
+- Orchestration Layer 완전 독립
+
+---
+
+#### **전략 4: Mock 프레임워크 활용 (Moq)**
+
+인터페이스 기반 의존성은 Moq로 Mock
+
+**예시**:
+```csharp
+[Fact]
+public async Task PipelineCoordinator_CheckBackPressure_SlowsGeneration()
+{
+    // Arrange
+    var mockGateway = new Mock<ISimulationGateway>();
+    mockGateway
+        .Setup(x => x.GenerateFrameAsync(It.IsAny<int>()))
+        .ReturnsAsync(new FrameContext { FrameId = 0 });
+
+    var controller = new GenerationController(mockGateway.Object);
+
+    // Act
+    await controller.GenerateFrameAsync(0);
+
+    // Assert
+    mockGateway.Verify(x => x.GenerateFrameAsync(0), Times.Once);
+}
+```
+
+---
+
+### 10.3 테스트 계층 분리
+
+| 계층 | 테스트 방법 | 실행 환경 | 예시 |
+|------|------------|----------|------|
+| **Orchestration Layer** | 단위 테스트 (Moq) | CLI (.NET) | GenerationController, PipelineCoordinator |
+| **DataPipeline** | 단위 테스트 (실제 데이터) | CLI (.NET) | CaptureWorker, DetectionWorker |
+| **Data Models** | 단위 테스트 (순수 C#) | CLI (.NET) | FrameContext, TrackingData |
+| **Simulation Layer** | Unity Test Framework | Unity Editor | CrowdService, EnvironmentCoordinator |
+| **통합** | E2E (Headless Unity) | CLI + Unity | 전체 파이프라인 |
+
+---
+
+### 10.4 Headless Unity 실행 (E2E 테스트)
+
+Unity를 CLI에서 실행하여 E2E 테스트
+
+**실행 스크립트**:
+```bash
+#!/bin/bash
+# tests/e2e/run_headless_unity.sh
+
+unity-editor \
+  -batchmode \
+  -nographics \
+  -silent-crashes \
+  -logFile unity.log \
+  -executeMethod ForgeTestRunner.RunE2ETest \
+  -testConfig tests/e2e/fixtures/basic_session.json
+
+# Unity 종료 코드 확인
+if [ $? -ne 0 ]; then
+  echo "Unity E2E test failed"
+  cat unity.log
+  exit 1
+fi
+```
+
+**Unity 테스트 진입점**:
+```csharp
+// ForgeTestRunner.cs (Unity 프로젝트 내)
+public static class ForgeTestRunner
+{
+    public static void RunE2ETest()
+    {
+        var configPath = GetCommandLineArg("-testConfig");
+        var config = LoadConfig(configPath);
+
+        // 세션 실행
+        var session = SessionManager.CreateSession(config);
+        SessionManager.Start(session);
+
+        // 완료 대기
+        while (!session.IsCompleted)
+        {
+            Thread.Sleep(100);
+        }
+
+        // 검증
+        ValidateOutput(session);
+
+        // 종료 코드 설정
+        EditorApplication.Exit(session.HasErrors ? 1 : 0);
+    }
+}
+```
+
+---
+
+### 10.5 CI/CD 통합 (Unity 테스트)
+
+**GitHub Actions 예시**:
+```yaml
+# .github/workflows/unity-tests.yml
+name: Unity Integration Tests
+
+on: [pull_request]
+
+jobs:
+  unity-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Cache Unity Library
+        uses: actions/cache@v2
+        with:
+          path: Library
+          key: Library-${{ hashFiles('ProjectSettings/ProjectVersion.txt') }}
+
+      - name: Run Unity Tests
+        uses: game-ci/unity-test-runner@v2
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+        with:
+          testMode: PlayMode
+
+      - name: Upload Test Results
+        uses: actions/upload-artifact@v2
+        if: always()
+        with:
+          name: Test results
+          path: artifacts
+```
+
+---
+
+### 10.6 Mock 데이터 생성 도구
+
+**FixtureBuilder 클래스**:
+```csharp
+// tests/fixtures/FixtureBuilder.cs
+public static class FixtureBuilder
+{
+    public static FrameContext CreateFrameContext(int frameId = 0, int personCount = 10)
+    {
+        return new FrameContext
+        {
+            FrameId = frameId,
+            Timestamp = DateTime.UtcNow,
+            SceneName = "Factory",
+            PersonStates = Enumerable.Range(1, personCount)
+                .Select(id => new PersonState
+                {
+                    GlobalPersonId = id,
+                    Position = new[] { Random.Shared.NextSingle() * 10, 0, Random.Shared.NextSingle() * 10 },
+                    Velocity = new[] { 1.0f, 0, 0 }
+                })
+                .ToList()
+        };
+    }
+
+    public static RawImageData CreateMockImage(int width = 1920, int height = 1080)
+    {
+        var pixels = new byte[width * height * 3];
+        Random.Shared.NextBytes(pixels);
+
+        return new RawImageData
+        {
+            Width = width,
+            Height = height,
+            PixelData = pixels,
+            Format = ImageFormat.RGB24
+        };
+    }
+}
+```
+
+**사용 예시**:
+```csharp
+[Fact]
+public void DetectionWorker_ProcessFrame_ReturnsDetections()
+{
+    // Arrange
+    var mockImage = FixtureBuilder.CreateMockImage();
+    var worker = new DetectionWorker();
+
+    // Act
+    var detections = worker.ProcessFrame(mockImage);
+
+    // Assert
+    detections.Should().NotBeEmpty();
+}
+```
+
+---
+
+### 10.7 테스트 디렉토리 구조 (최종)
+
+```
+tests/
+├── unit/                       # Unity 독립 단위 테스트 (.NET CLI)
+│   ├── Orchestration/
+│   ├── DataPipeline/
+│   └── DataModels/
+│
+├── unity/                      # Unity Test Framework (Unity Editor)
+│   ├── Simulation/
+│   │   ├── CrowdServiceTests.cs
+│   │   └── EnvironmentCoordinatorTests.cs
+│   └── Integration/
+│       └── FrameCaptureTests.cs
+│
+├── integration/                # 통합 테스트 (Mock Gateway 사용)
+│   ├── PipelineFlowTests.cs
+│   └── SessionLifecycleTests.cs
+│
+├── e2e/                        # E2E (Headless Unity)
+│   ├── run_headless_unity.sh
+│   └── fixtures/
+│
+├── fixtures/                   # 테스트 데이터
+│   ├── FixtureBuilder.cs       # Mock 데이터 생성기
+│   └── configs/
+│
+└── mocks/                      # Mock 구현
+    ├── MockSimulationGateway.cs
+    └── MockDetectionService.cs
+```
+
+---
+
+### 10.8 Phase 1 필수 Mock 구현
+
+- [ ] `MockSimulationGateway`: Unity 없이 FrameContext 생성
+- [ ] `MockDetectionService`: 고정된 bbox 반환
+- [ ] `FixtureBuilder`: 테스트 데이터 생성기
+- [ ] `InMemoryFileSystem`: 디스크 I/O 없는 StorageWorker 테스트
+
+---
+
+## 11. 참고 자료
 
 - [xUnit Documentation](https://xunit.net/)
 - [Moq Documentation](https://github.com/moq/moq4)
 - [BenchmarkDotNet](https://benchmarkdotnet.org/)
 - [FluentAssertions](https://fluentassertions.com/)
+- [Unity Test Framework](https://docs.unity3d.com/Packages/com.unity.test-framework@latest)
+- [GameCI (Unity CI/CD)](https://game.ci/)

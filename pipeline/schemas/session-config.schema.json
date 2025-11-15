@@ -6,6 +6,12 @@
   "type": "object",
   "required": ["sessionId", "totalFrames", "outputDirectory", "scenes", "cameras", "crowd", "timeWeather", "output"],
   "properties": {
+    "qualityMode": {
+      "type": "string",
+      "description": "Quality policy for frame drops and join timeouts",
+      "enum": ["strict", "relaxed"],
+      "default": "relaxed"
+    },
     "sessionId": {
       "type": "string",
       "description": "Unique session identifier",
@@ -54,11 +60,17 @@
     "randomization": {
       "$ref": "#/definitions/RandomizationConfig"
     },
+    "simulationGateway": {
+      "$ref": "#/definitions/SimulationGatewayConfig"
+    },
     "output": {
       "$ref": "#/definitions/OutputConfig"
     },
     "pipeline": {
       "$ref": "#/definitions/PipelineConfig"
+    },
+    "robotics": {
+      "$ref": "#/definitions/RoboticsConfig"
     }
   },
   "definitions": {
@@ -85,8 +97,8 @@
         "id": {
           "type": "string",
           "description": "Unique camera identifier",
-          "pattern": "^cam[0-9]{2}$",
-          "examples": ["cam01", "cam02"]
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "examples": ["cam01", "bot_cam_01"]
         },
         "resolution": {
           "type": "string",
@@ -136,7 +148,80 @@
               "minimum": 0,
               "maximum": 1,
               "default": 0.05
+            },
+            "rollingShutter": {
+              "type": "boolean",
+              "default": false
+            },
+            "motionBlur": {
+              "type": "object",
+              "properties": {
+                "exposureMs": {
+                  "type": "number",
+                  "minimum": 0,
+                  "default": 16.7
+                }
+              }
             }
+          }
+        },
+        "type": {
+          "type": "string",
+          "enum": ["static", "mobile"],
+          "default": "static"
+        },
+        "mobile": {
+          "$ref": "#/definitions/MobileCameraConfig"
+        }
+      }
+    },
+    "MobileCameraConfig": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "object",
+          "required": ["waypoints"],
+          "properties": {
+            "waypoints": {
+              "type": "array",
+              "minItems": 2,
+              "items": {
+                "type": "object",
+                "required": ["position"],
+                "properties": {
+                  "position": {
+                    "type": "array",
+                    "items": { "type": "number" },
+                    "minItems": 3,
+                    "maxItems": 3
+                  },
+                  "waitSeconds": {
+                    "type": "number",
+                    "minimum": 0,
+                    "default": 0
+                  }
+                }
+              }
+            },
+            "loop": { "type": "boolean", "default": false },
+            "maxSpeed": { "type": "number", "minimum": 0.01, "default": 1.5 },
+            "maxAngularSpeed": { "type": "number", "minimum": 0.1, "default": 45 },
+            "navmeshArea": { "type": "string" }
+          }
+        },
+        "controller": {
+          "type": "object",
+          "properties": {
+            "positionGain": { "type": "number", "minimum": 0, "default": 1.0 },
+            "rotationGain": { "type": "number", "minimum": 0, "default": 1.0 }
+          }
+        },
+        "poseLogging": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "sampleRate": { "type": "number", "minimum": 0.01, "default": 30 },
+            "output": { "type": "string" }
           }
         }
       }
@@ -301,6 +386,70 @@
               "type": "string",
               "description": "Path for ReID dataset (relative to outputDirectory)",
               "default": "reid_dataset"
+            },
+            "sampleInterval": {
+              "type": "integer",
+              "description": "Sampling interval for frame crops (1 = every frame)",
+              "minimum": 1,
+              "default": 1
+            },
+            "maxSamplesPerPerson": {
+              "type": "integer",
+              "description": "Maximum samples per person (0 = no limit)",
+              "minimum": 0,
+              "default": 0
+            },
+            "metadataFields": {
+              "type": "array",
+              "description": "Metadata columns to emit alongside crops",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true,
+              "default": [
+                "global_person_id",
+                "camera_id",
+                "frame_id",
+                "track_id",
+                "scene_name",
+                "occlusion",
+                "visibility",
+                "bbox_x",
+                "bbox_y",
+                "bbox_w",
+                "bbox_h",
+                "path"
+              ]
+            }
+          }
+        },
+        "edgeExport": {
+          "type": "object",
+          "description": "Edge export artifact options (Phase 3+)",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "formats": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": ["tfrecord", "npz", "onnx-bundle", "custom-binary"]
+              },
+              "uniqueItems": true,
+              "default": []
+            },
+            "outputPath": {
+              "type": "string",
+              "description": "Path for edge export artifacts (relative to outputDirectory)",
+              "default": "edge_packages"
+            },
+            "specVersion": {
+              "type": "string",
+              "description": "Edge artifact spec version",
+              "pattern": "^[0-9]+\\.[0-9]+$",
+              "default": "1.0"
             }
           }
         },
@@ -409,6 +558,132 @@
             }
           }
         }
+      }
+    },
+    "SimulationGatewayConfig": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["inprocess", "remote", "distributed"],
+          "default": "inprocess"
+        },
+        "host": { "type": "string", "default": "127.0.0.1" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 8080 },
+        "auth": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string", "enum": ["none", "api-key", "mtls"], "default": "none" },
+            "apiKeyEnv": { "type": "string" },
+            "certPath": { "type": "string" },
+            "keyPath": { "type": "string" }
+          }
+        },
+        "allowedHosts": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["127.0.0.1"]
+        }
+      },
+      "required": ["mode"]
+    },
+    "RoboticsConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "backend": { "type": "string", "enum": ["isaac"], "default": "isaac" },
+        "syncPolicy": {
+          "type": "object",
+          "properties": {
+            "maxDelayMs": { "type": "integer", "minimum": 0, "default": 100 },
+            "timeoutMs": { "type": "integer", "minimum": 1, "default": 5000 },
+            "onTimeout": { "type": "string", "enum": ["skip", "abort"], "default": "skip" }
+          }
+        },
+        "robotModel": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string", "enum": ["differential_drive", "holonomic"] },
+            "urdfPath": { "type": "string" },
+            "initialPose": {
+              "type": "object",
+              "properties": {
+                "x": { "type": "number", "default": 0 },
+                "y": { "type": "number", "default": 0 },
+                "z": { "type": "number", "default": 0 },
+                "yaw": { "type": "number", "default": 0 }
+              }
+            }
+          }
+        },
+        "lidar": { "$ref": "#/definitions/LidarConfig" },
+        "imu": { "$ref": "#/definitions/ImuConfig" },
+        "wheelOdom": { "$ref": "#/definitions/WheelOdomConfig" },
+        "depth": { "$ref": "#/definitions/DepthCameraConfig" }
+      }
+    },
+    "LidarConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "model": { "type": "string" },
+        "minRange": { "type": "number", "minimum": 0, "default": 0.1 },
+        "maxRange": { "type": "number", "minimum": 0, "default": 50.0 },
+        "verticalBeams": { "type": "integer", "minimum": 1, "default": 16 },
+        "horizontalResolutionDeg": { "type": "number", "minimum": 0.01, "default": 0.2 },
+        "rotationRateHz": { "type": "number", "minimum": 0.01, "default": 10 },
+        "noise": {
+          "type": "object",
+          "properties": {
+            "rangeStd": { "type": "number", "minimum": 0, "default": 0.02 },
+            "intensityStd": { "type": "number", "minimum": 0, "default": 0.05 }
+          }
+        }
+      }
+    },
+    "ImuConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "updateRateHz": { "type": "number", "minimum": 1, "default": 100 },
+        "noise": {
+          "type": "object",
+          "properties": {
+            "accelStd": { "type": "number", "minimum": 0, "default": 0.02 },
+            "gyroStd": { "type": "number", "minimum": 0, "default": 0.001 },
+            "biasDriftStd": { "type": "number", "minimum": 0, "default": 0.0001 }
+          }
+        }
+      }
+    },
+    "WheelOdomConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "ticksPerRevolution": { "type": "integer", "minimum": 1, "default": 2048 },
+        "wheelRadius": { "type": "number", "minimum": 0, "default": 0.1 },
+        "baseWidth": { "type": "number", "minimum": 0, "default": 0.5 },
+        "noise": {
+          "type": "object",
+          "properties": {
+            "slipFactor": { "type": "number", "minimum": 0, "default": 0.05 }
+          }
+        }
+      }
+    },
+    "DepthCameraConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "resolution": {
+          "type": "object",
+          "properties": {
+            "width": { "type": "integer", "minimum": 1, "default": 640 },
+            "height": { "type": "integer", "minimum": 1, "default": 480 }
+          }
+        },
+        "maxDepth": { "type": "number", "minimum": 0, "default": 20.0 },
+        "fov": { "type": "number", "minimum": 1, "maximum": 180, "default": 90 }
       }
     }
   }

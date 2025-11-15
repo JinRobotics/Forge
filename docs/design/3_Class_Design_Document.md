@@ -235,6 +235,7 @@ classDiagram
 - JSON/YAML 등 Config 파일 파싱
 - 필수 필드 존재 여부, 값 범위 검증
 - 기본값 채우기
+- 민감 필드(API Key/Token/사용자 경로) 필터링/마스킹 후 `config_json` 등으로 저장되도록 Sanitizer 호출
 
 주요 메서드:
 - `SessionConfig Load(string path)`
@@ -243,6 +244,22 @@ classDiagram
 관계:
 - SessionConfig (DataModel) 생성.
 - GenerationCommand에서 사용.
+
+#### 3.2.1 ConfigSanitizer
+
+역할:
+- Config 직렬화/저장/로그 이전에 민감 정보를 제거 또는 마스킹한다.
+
+주요 메서드:
+- `SessionConfig Sanitize(SessionConfig rawConfig)`
+- `SanitizedConfigSnapshot ToSnapshot(SessionConfig config)` // 저장/DB 기록용
+
+책임/규칙:
+- API Key/Bearer Token → `***` 마스킹
+- 사용자 홈 경로 → `/home/***` 등 일반화
+- 라이선스/비밀키 파일 경로 → 경로 저장 금지, 참조 ID만 유지
+- `docs/design/10_Security_and_Compliance.md` 필터링 표를 단일 소스로 사용
+- CLI/서버 구현 가이드에 Config 직렬화/저장/로그 경로마다 Sanitizer 호출을 필수 단계로 명시 (누락 시 테스트 실패 유도)
 
 ---
 
@@ -269,6 +286,23 @@ classDiagram
 ---
 
 ## 4. Forge.Orchestration
+
+### 4.0 HttpAuthMiddleware (API 모드)
+
+역할:
+- Orchestration HTTP 서버(분산/remote 모드)의 모든 엔드포인트에 인증/허용 호스트 정책을 적용하며 `/status`도 동일하게 보호한다.
+
+주요 책임:
+- API Key / Bearer Token 검증
+- mTLS 인증서 검증(옵션)
+- `allowedHosts`/바인딩 IP 확인
+- 인증 실패 시 401/403 반환, 상세 원인 로그는 민감 정보 제거 후 기록
+
+구현 체크리스트:
+- `/status` 포함 전 엔드포인트에 미들웨어가 실행되는지 통합 테스트로 보증
+- 상태 응답은 요약 지표만 포함하는지 계약 테스트로 검증
+- 필터링 규칙은 `ConfigSanitizer`/보안 가이드와 동일 소스 사용
+- CLI/서버 구현 가이드에 미들웨어 등록을 필수 단계로 명시 (누락 시 빌드/테스트 실패하도록 체크)
 
 ### 4.1 SessionManager
 
@@ -697,6 +731,24 @@ class SessionFinalizationService : ISessionFinalizationService {
 
 ---
 
+### 4.3-A SceneTransitionService
+
+역할:
+- ScenarioManager가 다음 Scenario로 이동할 때 Scene/Crowd 전환을 전담.
+
+주요 책임:
+- Scene 활성화/비활성화, NavMesh 전환
+- Crowd/PersonState 마이그레이션 (Global ID 유지)
+- 시간/조명/랜덤화 파라미터 반영
+
+주요 메서드:
+- void TransitionTo(ScenarioContext scenario)
+
+관계:
+- ScenarioManager로부터 호출되고, EnvironmentCoordinator/CrowdService와 협력.
+
+---
+
 ### 4.4 GenerationController
 
 역할:  
@@ -704,9 +756,10 @@ class SessionFinalizationService : ISessionFinalizationService {
 
 주요 책임:
 - 각 프레임마다 SimulationLayer 업데이트 호출
-- FrameContext 생성
+- FrameContext 생성 (timestamp는 시뮬레이션 월드 시간 기준, 재현성은 frame_id 중심)
 - FrameBus에 FrameContext push
-- PipelineCoordinator의 back-pressure 신호 반영 (FPS 조정, frame skip 등)
+- PipelineCoordinator의 back-pressure 신호 + IFrameRatePolicy 결과 반영 (FPS 조정, frame skip/일시정지 결정)
+- Scene/Crowd 전환은 SceneTransitionService로 위임해 책임 최소화
 
 주요 메서드:
 - void Initialize(SessionContext session, ScenarioManager scenarioManager)
@@ -718,9 +771,56 @@ class SessionFinalizationService : ISessionFinalizationService {
 - float targetFps
 - SessionContext sessionContext
 - ScenarioManager scenarioManager
+- IFrameRatePolicy frameRatePolicy
 
 스레드 제약:
 - Unity Main Thread에서만 실행.
+
+---
+
+### 4.4-A FrameRatePolicy
+
+역할:
+- Back-pressure, 사용자 설정(quality-first/speed-first/balanced) 등을 종합해 프레임 생성/skip/일시정지를 결정하는 정책 객체.
+
+주요 메서드:
+- FrameGenerationDecision Decide(BackPressureLevel level, SessionConfig config, long currentFrame)
+
+열거형:
+- FrameGenerationDecision { Generate, Skip, Pause }
+
+구현 지침:
+- 정책을 교체 가능하게 하여 GenerationController의 조건문 복잡도를 줄인다.
+- Config로 정책 선택 가능하도록 확장 (`frameRatePolicy: "quality-first"` 등).
+
+---
+
+### 4.4-B MultiSimSyncCoordinator (Phase 4+)
+
+역할:
+- Unity SimulationGateway와 Robotics Gateway(Isaac 등)를 동기화하고 FrameContext를 병합한다.
+
+필드:
+- `ISimulationGateway unityGateway`
+- `IRoboticsGateway roboticsGateway`
+- `SyncPolicy syncPolicy`
+
+주요 메서드:
+- `Task<FrameContext> StepAsync(long frameId, float deltaTime)` – 두 시뮬레이션 결과를 기다린 후 병합
+- `void OnTimeout()` – syncPolicy.onTimeout 적용 (skip/abort)
+
+관련 인터페이스:
+```csharp
+public interface IRoboticsGateway
+{
+    Task InitializeAsync(SessionConfig config);
+    Task<RoboticsStepResult> StepAsync(long frameId, float deltaTime);
+    Task ShutdownAsync();
+    RoboticsStatus GetStatus();
+}
+```
+
+병합 결과는 FrameBus로 전달되어 SensorExportWorker가 소비한다.
 
 ---
 
@@ -743,6 +843,35 @@ class SessionFinalizationService : ISessionFinalizationService {
 
 관계:
 - GenerationController, ProgressReporter, 각 Worker와 연결.
+
+---
+
+### 4.6 ISimulationGateway
+
+역할:
+- Orchestration Layer가 Simulation Layer(또는 Mock)와 통신하기 위한 상위 추상화.
+
+인터페이스:
+```csharp
+public interface ISimulationGateway
+{
+    Task InitializeAsync(SessionConfig config);
+    Task<FrameGenerationResult> GenerateFrameAsync(int frameId);
+    Task<SceneState> GetCurrentSceneStateAsync();
+    IReadOnlyList<CameraMeta> GetActiveCameras();
+    IReadOnlyList<CameraPose> GetCameraPoses(); // 이동형 카메라 pose 제공
+    void Shutdown();
+}
+```
+
+구현체:
+- UnitySimulationGateway (InProcess, MonoBehaviour)
+- HttpSimulationGateway (Remote/분산)
+- MockSimulationGateway (테스트)
+
+지침:
+- Architecture 문서의 SimulationGateway 시그니처/보안 설정과 동일하게 유지한다.
+- GenerationController는 `ISimulationGateway`만 알도록 하여 통신 방식 변경 시 영향 최소화.
 
 ---
 
@@ -818,6 +947,35 @@ public NavMesh GetNavMesh(string sceneName)
 
 관계:
 - CaptureWorker가 CameraService에서 카메라 메타/렌더 타겟 참조.
+
+---
+
+### 5.2-A MobileCameraController
+
+역할:  
+- `type=mobile` 카메라의 경로 추종, 포즈 업데이트, 센서 노이즈 적용, pose 로깅을 담당하는 상위 조정자.
+
+구성 요소:
+- **PathPlanner**: Config의 waypoint 리스트를 spline/Bezier 경로로 변환, loop/대기시간 반영.
+- **MotionController**: `maxSpeed`, `maxAngularSpeed`, PID gain을 적용해 위치/회전을 보간. NavMesh 충돌 회피 시 EnvironmentService에서 NavMesh 데이터를 주입받는다.
+- **SensorNoiseModule**: rolling shutter, motion blur, 노이즈 파라미터를 CameraService에 전달.
+- **PoseRecorder**: 각 프레임의 `CameraPose`(timestamp, position, rotation, velocity, sensor flags)를 버퍼링 후 `camera_poses/{cameraId}.csv` 및 manifest에 기록.
+- **CameraPoseProvider**: FrameBus/FrameContext 생성 시 최신 pose를 제공해 라벨과 manifest가 동일한 포즈 정보를 참조하도록 한다.
+
+주요 메서드:
+- `void Initialize(List<CameraConfig> cameras, NavMesh navMesh)`
+- `void Update(float deltaTime)` – GenerationController.Update() 내에서 호출, mobile 카메라 포즈 갱신
+- `CameraPose GetPose(string cameraId)`
+- `void FlushPoseLogs(SessionDirectory dir)` – 세션 종료/Checkpoint 시 호출, pose CSV 출력
+
+스레드 제약:
+- Unity Main Thread 전용. PoseRecorder의 디스크 flush만 별도 비동기로 수행 가능.
+
+데이터 흐름:
+1. ScenarioManager가 Scene 전환을 트리거하면 MobileCameraController가 해당 Scene NavMesh를 받아 PathPlanner를 재초기화.
+2. GenerationController.Update → MobileCameraController.Update → CameraService.ApplyPose.
+3. FrameBus Publish 시 FrameContext.cameraPoses = CameraPoseProvider.GetAll() 결과를 포함.
+4. Session 종료 시 PoseRecorder.Flush 후 ManifestService가 pose 파일 메타데이터를 기록.
 
 ---
 
@@ -2046,7 +2204,7 @@ public class COCOExporter
         {
             Info = new COCOInfo
             {
-                Description = $"SynCCTV Session {session.SessionId}",
+                Description = $"Forge Session {session.SessionId}",
                 Version = "1.0",
                 Year = DateTime.Now.Year,
                 DateCreated = session.StartedAt
@@ -2192,6 +2350,28 @@ public enum LabelFormat
 - Config 기반으로 포맷별 파이프라인(예: TFLite 전처리 → RecordWriter)을 모듈화.
 - 실패한 포맷만 격리하여 재시도/비활성화.
 - Back-pressure 정보를 PipelineCoordinator에 보고하여 GenerationController가 FPS를 조절할 수 있도록 한다.
+
+---
+
+### 7.11 SensorExportWorker (Phase 4+)
+
+역할:
+- Robotics Extension이 활성화된 세션에서 FrameContext.SensorMeta를 읽어 센서별 파일과 SLAM Export(TUM/KITTI/Forge)를 작성한다.
+
+입력:
+- `SensorExportJob` (FrameContext, OutputConfig.SensorExport 섹션)
+
+출력:
+- `SensorArtifact` (type, path, status, checksum)
+- `sensorQuality.json` 업데이트
+
+주요 메서드:
+- `void Enqueue(SensorExportJob job)`
+- `Task FlushAsync()` – 세션 종료 시 rgb/depth/groundtruth 목록 파일 flush
+
+구현 팁:
+- Pose/LiDAR 등 시간 순서를 유지해야 하므로 job 순서 보장 필요
+- strict 품질 모드에서는 누락/시간 오차 발생 시 즉시 Exception 발생 → SessionManager가 중단
 
 ---
 

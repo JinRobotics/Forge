@@ -1,7 +1,8 @@
 # Checkpoint & Recovery Mechanism
 
-> **문서 버전:** v1.0 (2025-02-14)  
-> **변경 이력:**  
+> **문서 버전:** v1.1 (2025-11-15)
+> **변경 이력:**
+> - v1.1 (2025-11-15): Phase별 Checkpoint 범위 재조정 (§7)
 > - v1.0 (2025-02-14): 초기 작성
 
 ## 1. 목적
@@ -298,12 +299,15 @@ public SessionContext ResumeFromCheckpoint(string checkpointPath)
     // 2. SessionConfig 로드
     var config = LoadConfig(checkpoint.SessionContext.ConfigPath);
 
+    // 2-1. 마지막으로 **저장 완료**된 프레임 기준 계산
+    var lastStoredFrame = checkpoint.PipelineState?.LastStoredFrame ?? checkpoint.CurrentFrame;
+
     // 3. SessionContext 복원
     var session = new SessionContext
     {
         Config = config,
         SessionDirectory = checkpoint.SessionContext.OutputDirectory,
-        CurrentFrame = checkpoint.CurrentFrame,
+        CurrentFrame = lastStoredFrame,
         StartedAt = checkpoint.SessionContext.StartedAt
     };
 
@@ -322,12 +326,24 @@ public SessionContext ResumeFromCheckpoint(string checkpointPath)
     // 8. PipelineCoordinator: Queue 비우기 (fresh start)
     _pipelineCoordinator.Reset();
 
-    // 9. 다음 프레임부터 시작
-    session.CurrentFrame = checkpoint.CurrentFrame + 1;
+    // 9. 다른 설정/메타 복원
+    _metadataRestorer?.Restore(checkpoint.SessionContext);
 
-    _logger.LogInformation($"Resumed from checkpoint: frame {checkpoint.CurrentFrame}");
+    // 10. 다음 프레임부터 시작 (마지막 저장 프레임 이후)
+    session.CurrentFrame = Math.Min(lastStoredFrame, checkpoint.CurrentFrame) + 1;
+
+    _logger.LogInformation($"Resumed from checkpoint: frame {session.CurrentFrame - 1} (last stored)");
     return session;
 }
+```
+
+**시퀀스 다이어그램(개념)**:
+```
+User/CLI → SessionManager → CheckpointManager: Load checkpoint
+CheckpointManager → ValidationService: Verify files(images/labels)/config
+CheckpointManager → ScenarioManager/CrowdService/TrackingWorker: Restore state
+CheckpointManager → PipelineCoordinator: Reset queues
+SessionManager: Resume at lastStoredFrame + 1
 ```
 
 ### 5.3 복구 시 검증
@@ -344,15 +360,23 @@ private void ValidateCheckpoint(Checkpoint checkpoint)
     if (!Directory.Exists(outputDir))
         throw new Exception("Output directory not found");
 
-    // 3. 생성된 프레임 수 확인
-    var expectedFrames = checkpoint.CurrentFrame;
-    var actualFrames = Directory.GetFiles(
-        Path.Combine(outputDir, "images", "cam01"),
-        "*.jpg"
-    ).Length;
+    // 3. 생성된 프레임 수 확인 (마지막 저장 프레임 기준, 전 카메라/라벨 검증)
+    var expectedFrames = checkpoint.PipelineState?.LastStoredFrame ?? checkpoint.CurrentFrame;
 
-    if (actualFrames < expectedFrames - 100) // 100 프레임 오차 허용
-        _logger.LogWarning($"Frame mismatch: expected {expectedFrames}, found {actualFrames}");
+    foreach (var cameraDir in Directory.GetDirectories(Path.Combine(outputDir, "images")))
+    {
+        var actualFrames = Directory.GetFiles(cameraDir, "*.jpg").Length;
+        if (actualFrames < expectedFrames - 50) // 카메라별 허용 오차 50
+            _logger.LogWarning($"Frame mismatch ({Path.GetFileName(cameraDir)}): expected {expectedFrames}, found {actualFrames}");
+    }
+
+    var labelDir = Path.Combine(outputDir, "labels");
+    if (Directory.Exists(labelDir))
+    {
+        var labelFiles = Directory.GetFiles(labelDir, "*.json", SearchOption.AllDirectories).Length;
+        if (labelFiles < expectedFrames - 50) // 최소 프레임 수만큼 라벨이 있어야 함 (카메라당 1개 이상 권장)
+            _logger.LogWarning($"Label count suspicious: expected at least {expectedFrames}, found {labelFiles}");
+    }
 
     // 4. Config 파일 존재 확인
     if (!File.Exists(checkpoint.SessionContext.ConfigPath))
@@ -411,43 +435,232 @@ foreach (var camera in checkpoint.TrackingState.Cameras)
 
 ## 7. Phase별 Checkpoint 기능
 
-### Phase 1: 수동 복구 (선택적)
+### Phase 1: 최소 복구 (Minimal Recovery)
+
+**목표**: 중단된 세션의 **프레임 번호**만 복구하여 재시작
 
 **범위**:
-- Checkpoint 저장: 수동 (사용자가 Ctrl+C 등으로 중단 시)
-- 복구: 수동 (세션 디렉토리 재사용)
+- ✅ Checkpoint 저장: 기본 메타데이터만 (JSON)
+  - session_id
+  - current_frame (마지막 **저장 완료된** 프레임)
+  - total_frames
+  - scene_name
+  - output_directory
+  - global_person_id_count (다음 할당 ID)
 
-**제약**:
-- Tracking 상태 복원 안 됨 (track ID 불일치 가능)
-- Crowd 상태 복원 안 됨 (새 인물 생성)
+- ✅ 복구: 자동 (CLI 옵션 또는 프롬프트)
+  - 마지막 저장 프레임 이후부터 재시작
+  - Scene 재로드
+  - Crowd 새로 생성 (Appearance 랜덤)
+
+**복원되지 않는 것**:
+- ❌ Tracking 상태 (track ID 0부터 재시작)
+- ❌ Crowd 위치/Behavior (새로 생성)
+- ❌ Pipeline Queue 상태
+
+**Checkpoint 파일 예시**:
+```json
+{
+  "checkpointVersion": "1.0.0",
+  "createdAt": "2023-10-27T15:30:45Z",
+  "sessionId": "session_factory_001",
+  "currentFrame": 30000,
+  "totalFrames": 100000,
+  "sessionContext": {
+    "configPath": "/path/to/config.json",
+    "outputDirectory": "/data/output/session_factory_001"
+  },
+  "scenarioState": {
+    "currentSceneIndex": 0,
+    "sceneName": "Factory"
+  },
+  "statistics": {
+    "avgFps": 8.5,
+    "totalDetections": 1245000
+  }
+}
+```
+
+**저장 간격**: 10,000 프레임마다 (약 20분 @ 8 FPS)
+
+**복구 절차**:
+```csharp
+public SessionContext ResumeFromCheckpoint(string checkpointPath)
+{
+    var checkpoint = LoadCheckpoint(checkpointPath);
+
+    // 1. Config 재로드
+    var config = LoadConfig(checkpoint.SessionContext.ConfigPath);
+
+    // 2. Session 재생성
+    var session = new SessionContext
+    {
+        Config = config,
+        SessionDirectory = checkpoint.SessionContext.OutputDirectory,
+        CurrentFrame = checkpoint.CurrentFrame + 1  // 다음 프레임부터
+    };
+
+    // 3. Scene 재로드 (Unity)
+    _envCoordinator.ActivateScene(checkpoint.ScenarioState.SceneName);
+
+    // 4. Crowd 새로 생성 (Tracking은 reset)
+    _crowdService.SpawnInitialCrowd(config.Crowd);
+
+    return session;
+}
+```
 
 **용도**:
-- 개발 중 간단한 테스트
-- 치명적 오류 발생 시 일부 프레임 재사용
+- ✅ 개발/디버깅 중 빠른 재시작
+- ✅ 치명적 오류 후 부분 복구 (일부 데이터 손실 허용)
+- ❌ 프로덕션 환경 (데이터 품질 요구 높음)
 
-### Phase 2: 기본 Checkpoint
+---
 
-**범위**:
-- 자동 저장: 프레임 수 기반 (10,000 프레임마다)
-- 자동 복구: CLI 옵션 또는 대화형 프롬프트
-- Tracking 상태 복원: 지원
-- Crowd 상태 복원: 지원
+### Phase 2: 상태 복원 (State Recovery)
 
-**제약**:
-- 단일 노드만 지원
-- Checkpoint 파일 크기: ~1MB
+**목표**: Tracking/Crowd 상태까지 정확히 복원
 
-### Phase 3: Advanced Checkpoint
+**범위** (Phase 1 +):
+- ✅ Tracking 상태 복원
+  - 카메라별 nextTrackId
+  - Active tracks (trackId, globalPersonId, lastSeenFrame, bbox)
 
-**범위**:
-- 증분 저장: 변경된 상태만 저장
-- 압축: gzip 적용
-- 분산 환경: 여러 노드의 상태 통합
-- 클라우드 스토리지: S3/GCS에 자동 업로드
+- ✅ Crowd 상태 복원
+  - Active persons (globalPersonId, position, velocity, behavior, appearance)
+  - nextPersonId
 
-**제약**:
-- 구현 복잡도 증가
-- 복구 시간 증가 가능
+**Checkpoint 파일 예시** (추가 부분):
+```json
+{
+  "trackingState": {
+    "cameras": [
+      {
+        "cameraId": "cam01",
+        "nextTrackId": 125,
+        "activeTracks": [
+          {
+            "trackId": 101,
+            "globalPersonId": 5,
+            "lastSeenFrame": 29998,
+            "bbox": {"xmin": 540, "ymin": 320, "xmax": 680, "ymax": 710}
+          }
+        ]
+      }
+    ]
+  },
+  "crowdState": {
+    "activePersons": [
+      {
+        "globalPersonId": 5,
+        "position": [10.5, 0, -8.3],
+        "velocity": [0.8, 0, 0.2],
+        "behavior": "walk",
+        "appearance": {"model": "person_01", "texture": "casual_blue"}
+      }
+    ],
+    "nextPersonId": 25
+  }
+}
+```
+
+**복구 절차** (Phase 1 +):
+```csharp
+// 5. Tracking 상태 복원
+_trackingWorker.RestoreState(checkpoint.TrackingState);
+
+// 6. Crowd 상태 복원 (위치/Appearance 유지)
+_crowdService.RestoreState(checkpoint.CrowdState);
+```
+
+**파일 크기**: ~1~2 MB (인원 100명 기준)
+
+**저장 간격**: 10,000 프레임마다 (Phase 1과 동일)
+
+**용도**:
+- ✅ 프로덕션 환경 (데이터 품질 중요)
+- ✅ Scene 전환 중 복구
+- ✅ Global ID 연속성 보장
+
+---
+
+### Phase 3: 완전 복구 (Full Recovery)
+
+**목표**: Pipeline Queue 상태까지 복원 (중단 직전 상태로)
+
+**범위** (Phase 2 +):
+- ✅ Pipeline 상태 복원
+  - 각 Worker의 Queue depth
+  - 처리 중인 프레임 목록
+  - Back-pressure 상태
+
+- ✅ 증분 저장 (Delta Checkpoint)
+  - 변경된 상태만 저장 (압축률 10배↑)
+
+- ✅ 분산 환경 지원
+  - 여러 Worker 노드의 상태 통합
+
+- ✅ 클라우드 저장소 연동
+  - S3/GCS 자동 업로드
+
+**Checkpoint 파일 예시** (추가 부분):
+```json
+{
+  "pipelineState": {
+    "lastCapturedFrame": 30050,
+    "lastDetectedFrame": 30020,
+    "lastTrackedFrame": 30010,
+    "lastStoredFrame": 30000,
+    "queueDepths": {
+      "capture": 50,
+      "detection": 30,
+      "tracking": 20
+    },
+    "pendingFrames": [30001, 30002, ...]
+  }
+}
+```
+
+**파일 크기**: ~5~10 MB (압축 전), ~500 KB (gzip 압축 후)
+
+**저장 간격**: 5,000 프레임마다 (더 자주 저장)
+
+**용도**:
+- ✅ 고가용성 환경 (중단 허용 안 함)
+- ✅ 클라우드 분산 처리
+- ✅ 장시간 실행 세션 (1M+ 프레임)
+
+---
+
+### Phase별 비교표
+
+| 항목 | Phase 1 | Phase 2 | Phase 3 |
+|------|---------|---------|---------|
+| **프레임 번호 복구** | ✅ | ✅ | ✅ |
+| **Tracking 상태** | ❌ (reset) | ✅ | ✅ |
+| **Crowd 상태** | ❌ (재생성) | ✅ | ✅ |
+| **Pipeline Queue** | ❌ | ❌ | ✅ |
+| **저장 간격** | 10,000 frame | 10,000 frame | 5,000 frame |
+| **파일 크기** | ~100 KB | ~1 MB | ~500 KB (압축) |
+| **복구 시간** | ~30초 | ~1분 | ~2분 |
+| **데이터 손실** | 허용 | 최소 | 거의 없음 |
+| **구현 복잡도** | 낮음 | 중간 | 높음 |
+
+---
+
+### 권장 사항
+
+**개발 환경**:
+- Phase 1 사용 (빠른 재시작, 간단함)
+
+**소규모 프로덕션** (< 100K 프레임):
+- Phase 1 사용 (충분함)
+
+**대규모 프로덕션** (100K~500K 프레임):
+- Phase 2 사용 (상태 보존 필요)
+
+**클라우드/분산 환경** (1M+ 프레임):
+- Phase 3 사용 (고가용성 요구)
 
 ---
 

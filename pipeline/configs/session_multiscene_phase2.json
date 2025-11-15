@@ -1,4 +1,5 @@
 {
+  "qualityMode": "relaxed",
   "sessionId": "session_multiscene_phase2_001",
   "totalFrames": 500000,
   "outputDirectory": "/data/output",
@@ -79,7 +80,29 @@
     "labelFormats": ["json", "yolo"],
     "reidDataset": {
       "enabled": true,
-      "outputPath": "reid_dataset"
+      "outputPath": "reid_dataset",
+      "sampleInterval": 1,
+      "maxSamplesPerPerson": 0,
+      "metadataFields": [
+        "global_person_id",
+        "camera_id",
+        "frame_id",
+        "track_id",
+        "scene_name",
+        "occlusion",
+        "visibility",
+        "bbox_x",
+        "bbox_y",
+        "bbox_w",
+        "bbox_h",
+        "path"
+      ]
+    },
+    "edgeExport": {
+      "enabled": false,
+      "formats": [],
+      "outputPath": "edge_packages",
+      "specVersion": "1.0"
     },
     "manifest": {
       "enabled": true,

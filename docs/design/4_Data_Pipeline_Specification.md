@@ -2,8 +2,9 @@ Forge
 
 ---
 
-> **문서 버전:** v2.0 (2025-02-15)
+> **문서 버전:** v2.1 (2025-11-15)
 > **변경 이력:**
+> - v2.1 (2025-11-15): Memory Ownership & Lifetime 섹션 추가 (§2.0)
 > - v2.0 (2025-02-15): FrameBus Thread-safety 구체화, Zero-Copy Pipeline 옵션 추가
 > - v1.1 (2025-02-14): ReID Dataset Export Stage 반영, 버전 섹션 추가
 > - v1.0 (2024-12-01): 초기 작성
@@ -24,6 +25,199 @@ Forge
 ---
 
 ## 2. 전체 파이프라인 개요
+
+### 2.0 메모리 소유권 및 생명주기 (Memory Ownership & Lifetime)
+
+#### 2.0.1 기본 원칙
+
+**원칙 1: 소유권 이전 (Move Semantics)**
+- Stage 간 데이터 전달 시 **소유권이 이전**된다
+- 이전 Stage는 데이터를 더 이상 참조하지 않는다
+- 마지막 소비자가 메모리 해제 책임을 진다
+
+**원칙 2: 불변성 (Immutability)**
+- 기본 방식에서 각 Stage는 **새 객체를 생성**한다
+- 이전 Stage의 데이터를 수정하지 않는다
+- Thread-safety 보장
+
+**원칙 3: ArrayPool 사용**
+- 대용량 byte[] 버퍼는 `ArrayPool<byte>.Shared` 사용
+- 마지막 소비자가 `Return()` 호출 책임
+
+#### 2.0.2 객체별 소유권 규칙
+
+| 객체 타입 | 생성자 | 초기 소유자 | 이전 경로 | 최종 소비자 | 해제 시점 |
+|----------|--------|------------|-----------|------------|----------|
+| `FrameContext` | GenerationController | FrameBus | CaptureWorker | CaptureWorker | Capture 완료 후 즉시 |
+| `RawImageData` | CaptureWorker | DetectionWorker | TrackingWorker | DetectionWorker | Detection 완료 후 |
+| `byte[] pixels` | CaptureWorker (Pool) | RawImageData | EncodeWorker | EncodeWorker | Encode 완료 후 Return |
+| `DetectionData` | DetectionWorker | TrackingWorker | LabelAssembler | TrackingWorker | Tracking 완료 후 |
+| `TrackingData` | TrackingWorker | LabelAssembler | - | LabelAssembler | Assembly 완료 후 |
+| `OcclusionData` | OcclusionWorker | LabelAssembler | - | LabelAssembler | Assembly 완료 후 |
+| `LabeledFrame` | LabelAssembler | EncodeWorker | StorageWorker | EncodeWorker | Encode 완료 후 |
+| `EncodedFrame` | EncodeWorker | StorageWorker | - | StorageWorker | 저장 완료 후 |
+
+#### 2.0.3 ArrayPool 사용 패턴
+
+```csharp
+// CaptureWorker.cs
+public RawImageData CaptureImage(Camera camera)
+{
+    int pixelCount = width * height * 4;  // RGBA
+    byte[] buffer = ArrayPool<byte>.Shared.Rent(pixelCount);
+
+    try
+    {
+        // Unity에서 픽셀 읽기
+        ReadPixels(camera, buffer);
+
+        return new RawImageData
+        {
+            CameraId = camera.Id,
+            FrameId = frameId,
+            Pixels = buffer,  // ← 소유권 이전
+            Width = width,
+            Height = height,
+            IsPooled = true  // ← Pool 사용 표시
+        };
+    }
+    catch
+    {
+        // 예외 발생 시 즉시 반환
+        ArrayPool<byte>.Shared.Return(buffer);
+        throw;
+    }
+}
+
+// EncodeWorker.cs
+public EncodedFrame EncodeImage(RawImageData rawImage, LabeledFrame label)
+{
+    try
+    {
+        // 이미지 인코딩 (JPEG)
+        byte[] jpegBytes = EncodeToJPEG(rawImage.Pixels, rawImage.Width, rawImage.Height);
+
+        return new EncodedFrame
+        {
+            FrameId = rawImage.FrameId,
+            ImageBytes = jpegBytes,
+            Label = label
+        };
+    }
+    finally
+    {
+        // EncodeWorker가 마지막 소비자 → Pool 반환
+        if (rawImage.IsPooled)
+        {
+            ArrayPool<byte>.Shared.Return(rawImage.Pixels);
+        }
+    }
+}
+```
+
+#### 2.0.4 Zero-Copy 방식의 소유권
+
+Zero-Copy 방식에서는 **단일 FramePipelineContext** 객체가 파이프라인 전체를 통과한다.
+
+```csharp
+public class FramePipelineContext
+{
+    public FrameContext Frame { get; init; }
+    public RawImageData[] Images { get; set; }
+    public DetectionData Detection { get; set; }
+    public TrackingData Tracking { get; set; }
+    public LabeledFrame Label { get; set; }
+    public EncodedFrame Encoded { get; set; }
+
+    // Stage 상태 추적
+    public Dictionary<string, StageStatus> StageStatuses { get; } = new();
+}
+
+// 각 Stage는 자신의 필드만 set (Idempotent Write)
+public class DetectionWorker
+{
+    public void Process(FramePipelineContext context)
+    {
+        // Detection 수행
+        var detections = DetectPersons(context.Images);
+
+        // 한 번만 set
+        context.Detection = detections;
+        context.StageStatuses["Detection"] = StageStatus.Completed;
+
+        // 이후 read-only로 취급
+    }
+}
+```
+
+**소유권 규칙**:
+- `FramePipelineContext`는 **FrameBus가 생성**, **StorageWorker가 해제**
+- 각 Stage는 자신이 set한 필드에 대해서만 **쓰기 권한** 보유
+- 다른 Stage의 필드는 **읽기 전용**
+
+#### 2.0.5 메모리 누수 방지 체크리스트
+
+**개발 시 확인 사항**:
+- [ ] ArrayPool에서 Rent한 버퍼를 반드시 Return 했는가?
+- [ ] 예외 발생 시에도 Return이 호출되는가? (try-finally)
+- [ ] RawImageData.IsPooled 플래그가 올바르게 설정되었는가?
+- [ ] Worker 종료 시 Queue에 남은 객체를 모두 해제했는가?
+- [ ] Event handler 등록 시 해제(unsubscribe)를 했는가?
+
+**테스트 방법**:
+```csharp
+[Fact]
+public void Pipeline_LongRunning_NoMemoryLeak()
+{
+    var initialMemory = GC.GetTotalMemory(forceFullCollection: true);
+
+    // 10,000 프레임 생성
+    for (int i = 0; i < 10000; i++)
+    {
+        var frame = GenerateFrame(i);
+        ProcessPipeline(frame);
+    }
+
+    GC.Collect();
+    GC.WaitForPendingFinalizers();
+    GC.Collect();
+
+    var finalMemory = GC.GetTotalMemory(forceFullCollection: true);
+    var leaked = finalMemory - initialMemory;
+
+    // 메모리 증가가 10% 이하여야 함
+    Assert.True(leaked < initialMemory * 0.1,
+        $"Memory leak detected: {leaked / 1024 / 1024} MB");
+}
+```
+
+#### 2.0.6 Stage별 메모리 예산 (Phase 2+)
+
+| Stage | 객체당 메모리 | Queue 크기 | 총 메모리 예산 |
+|-------|-------------|-----------|--------------|
+| FrameBus | 10 KB | 512 | ~5 MB |
+| CaptureWorker | 8 MB (1080p RGBA) | 512 | ~4 GB |
+| DetectionWorker | 100 KB | 512 | ~50 MB |
+| TrackingWorker | 50 KB | 2048 | ~100 MB |
+| LabelAssembler | 200 KB | 2048 | ~400 MB |
+| EncodeWorker | 500 KB (JPEG) | 2048 | ~1 GB |
+| StorageWorker | 500 KB | 4096 | ~2 GB |
+
+**총 메모리 사용량 (최악)**:
+```
+이미지 버퍼: 4 GB
+기타 데이터: 0.5 GB
+시스템 오버헤드: 1 GB
+─────────────────
+합계: ~5.5 GB
+```
+
+**최적화 전략**:
+- CaptureWorker 큐 크기 축소 (512 → 128)
+- AsyncGPUReadback 사용하여 GPU → CPU 복사 지연
+- ArrayPool 사용으로 할당 빈도 감소
+
+---
 
 ### 2.1 단계(Stage)
 
@@ -65,6 +259,7 @@ class FramePipelineContext {
     public TrackingData Tracking { get; set; }
     public LabeledFrame Label { get; set; }
     public EncodedFrame Encoded { get; set; }
+    public IReadOnlyList<CameraPose> CameraPoses { get; set; }
 }
 
 // 단일 FramePipelineContext 객체가 파이프라인 전체를 통과
@@ -86,8 +281,19 @@ THEN Zero-Copy 방식 고려
 ELSE 기본 방식 유지 (단순성 우선)
 ```
 
+**Zero-Copy 제약/에러 보고 (Experimental, 기본 OFF):**
+- Zero-Copy는 실험 옵션이며 기본 비활성화한다.
+- `FramePipelineContext`에 `StageStatuses`(Dictionary<string, StageStatus>)와 `StageErrorFlags`를 추가해 Stage별 완료/실패를 기록한다.
+- 각 Stage는 자신에게 할당된 필드를 **한 번만 set**(idempotent write)하고 이후 read-only로 취급한다.
+- Stage에서 예외/누락 발생 시 `StageStatuses["Tracking"]=Failed` 식으로 플래그를 남기고, Validation/Manifest가 StageStatuses를 집계해 품질 보고에 반영한다.
+
 **별도 흐름 (ReID Export):**
 - RawImageData + TrackingData → ReID Crop Images (person_id 기반 디렉토리)
+- 이동형 카메라 pose:
+  - FrameBus Publish 시 `FrameContext`에 `CameraPoses`(camera_id, extrinsic, position, rotation, timestamp)를 포함한다.
+  - CaptureWorker는 `FramePipelineContext.CameraPoses`에 pose 리스트를 그대로 전달한다.
+  - LabelAssembler는 LabeledFrame/ManifestStage가 pose 정보를 참조할 수 있도록 `LabeledFrame.CameraPoses` 또는 별도 DTO에 포함한다.
+  - ManifestWriter는 pose 데이터를 `meta/camera_poses/{camera_id}.csv` 또는 `manifest.cameras[].poses`에 직렬화한다. 필수 컬럼: frame_id, timestamp, position(x,y,z), rotation(quaternion), speed(optional).
 
 ### 2.3 Frame Generation Sequence Diagram
 
@@ -180,6 +386,13 @@ sequenceDiagram
     end
 ```
 
+### 2.4 품질 모드 (Quality Mode)
+
+`session.qualityMode ∈ { strict, relaxed }`
+
+- **strict**: 프레임 드롭이 발생하면 세션을 PAUSE/FAIL 처리. FrameBus/LabelAssembler 등에서 drop 발생 시 GenerationController가 일시정지 후 재시도, 회복 불가 시 세션 실패로 간주. 최종 manifest/validation에서 frameDropCount > 0이면 invalid.
+- **relaxed**: 프레임 드롭 허용. 드롭 수치는 `metrics.frame.dropped_total`, `manifest.quality.frameDropCount` 등으로 집계하여 투명하게 노출. 기본 모드.
+
 ---
 
 ## 3. ID 정책 (ID Policy)
@@ -247,6 +460,9 @@ Queue:
 - 내부적으로 thread-safe queue 사용.
 - Publish: Main Thread (GenerationController)
 - Consume: CaptureWorker Thread
+- 품질 모드 반영:
+  - strict: `Publish` 실패(큐 초과) 시 GenerationController에 PAUSE/FAIL 신호. 드롭 금지.
+  - relaxed: `Publish` 실패 시 해당 frame drop, `metrics.frame.dropped_total` 및 `manifest.quality.frameDropCount`에 누적.
 
 **Thread-safety 구현 (구체화):**
 
@@ -354,6 +570,7 @@ public class FrameBus : IFrameBus {
 
 역할:
 - 각 카메라의 이미지 캡처 → RawImageData 생성.
+- Unity API 렌더/ReadPixels는 메인/렌더 스레드 제약을 받으므로, CaptureWorker는 **메인 스레드에서 준비된 버퍼(동기 캡처 또는 AsyncGPUReadback 결과)**만 소비한다.
 
 Input:
 - FrameContext
@@ -369,8 +586,8 @@ Queue:
   - PipelineCoordinator에 back-pressure 신호 전달
 
 동시성:
-- CaptureWorker Thread 1개 (Phase 1)
-- Phase 2+: 필요 시 2개 이상으로 확장 가능하나, Unity Render/Readback 제약 고려.
+- Phase 1: 메인 스레드 동기 캡처(카메라 렌더 + ReadPixels). CaptureWorker는 이미 채워진 byte[]/NativeArray를 감싸는 역할만 수행.
+- Phase 2: AsyncGPUReadback 사용. 메인 스레드 콜백에서 GPU→CPU 복사 완료 후 Worker 큐에 push. 필요 시 2개 이상으로 확장 가능하나 Unity Render/Readback 제약 고려.
 
 순서:
 - 입력 frame_id 순서로 처리되도록 노력하되, 타 Stage는 순서에 의존하지 않도록 설계.
@@ -506,6 +723,9 @@ Queue:
 
 동시성:
 - LabelAssembler Thread: 1 (권장)
+- 품질 모드:
+  - strict: Tracking 누락 + 타임아웃 시 세션 실패/PAUSE. 프레임 드롭 금지.
+  - relaxed: 누락 프레임만 drop, `metrics.label.dropped_by_join_timeout_total` 및 `manifest.quality.droppedByJoinTimeout`에 기록.
 
 **Join 로직 상세 구현 (구체화):**
 
@@ -627,6 +847,7 @@ class PartialFrameData {
 | **Max Pending Frames** | 100 | 메모리 제한 (Frame별 평균 10KB 기준 1MB) |
 | **필수 데이터** | TrackingData | 없으면 Frame skip |
 | **선택 데이터** | OcclusionData | 없어도 진행 (Phase 2+) |
+| **품질 모드 연동** | strict: timeout 시 세션 실패<br/>relaxed: drop+카운터 기록 | session.qualityMode 적용 |
 
 **타임아웃 발생 시나리오:**
 
@@ -731,7 +952,7 @@ Input:
 - TrackingData
 
 Output:
-- ReIDExportResult (저장된 crop 파일 경로)
+- ReIDExportResult (저장된 crop 파일 경로, artifact status)
 
 Queue:
 - 입력 큐: `Queue<ReIDExportJob>`
@@ -740,29 +961,21 @@ Queue:
 Export 디렉토리 구조:
 ```
 /output/reid_dataset/
-  person_0001/
-    cam01_frame_000123.jpg
-    cam02_frame_000456.jpg
-  person_0002/
-    cam01_frame_000789.jpg
-    ...
+  <global_person_id>/
+    <camera_id>/
+      frame_<frame_id>.jpg
 ```
 
 파일명 규칙:
-- `{cameraId}_frame_{frameId:06d}.jpg`
+- `frame_{frameId:06d}.jpg`
 
 메타데이터:
-- 별도 `metadata.json` 생성:
-```json
-{
-  "person_0001": {
-    "images": [
-      {"camera": "cam01", "frame": 123, "path": "person_0001/cam01_frame_000123.jpg"},
-      {"camera": "cam02", "frame": 456, "path": "person_0001/cam02_frame_000456.jpg"}
-    ]
-  }
-}
-```
+- `metadata.csv` (필수 컬럼): `global_person_id,camera_id,frame_id,track_id,scene_name,occlusion,visibility,bbox_x,bbox_y,bbox_w,bbox_h,path`
+- 필요 시 `metadata.json` 병행 생성 가능.
+
+샘플링 정책:
+- `reid.sample_interval` (기본 1 → 모든 frame)
+- `reid.max_samples_per_person` (기본 0 → 제한 없음)
 
 동시성:
 - ReIDExportWorker Thread: 1~2 (I/O bound)
@@ -770,6 +983,7 @@ Export 디렉토리 구조:
 에러 처리:
 - Crop 실패: 해당 person/frame skip, 로그 기록
 - 디스크 공간 부족: 세션 중단
+- Export 실패는 세션 실패로 보지 않고 `manifest.reidArtifacts[].status ∈ { "ok", "failed" }`로 기록
 
 성능 목표:
 - Export는 선택적 기능이므로 전체 파이프라인 FPS에 영향 최소화
@@ -777,11 +991,44 @@ Export 디렉토리 구조:
 
 ---
 
-### 4.11 Edge Export Stage – EdgeExportWorker (Phase 3+)
+### 4.11 Sensor Export Stage – SensorExportWorker (Phase 4+)
+
+역할:
+- Robotics Extension이 활성화된 세션에서 LiDAR/IMU/Wheel Odom/Depth/Trajectory와 SLAM Export(TUM/KITTI/Forge custom)를 생성한다.
+
+Input:
+- FrameContext (RobotPose, SensorMeta 포함)
+
+Output:
+- `sensors/` 디렉터리 내 센서별 파일
+- `slam_export/tum/*`, `slam_export/kitti/*`
+- Sensor quality 요약 (meta/sensorQuality.json)
+
+Queue:
+- SensorExportQueue (기본 512)
+
+동시성:
+- 1개 워커(기본) – 포맷별 순차 출력
+- 대량 세션일 경우 Config로 2개까지 확장 가능
+
+에러 처리:
+- 파일 쓰기 실패 시 N회 재시도 후 실패 → manifest.robotics.sensors[].status=`failed`
+- strict 품질모드에서는 실패 즉시 세션 종료
+
+모니터링:
+- `metrics.sensor_export.processed_frames`
+- `metrics.sensor_export.failures_total`
+
+Phase 4 기능이 비활성일 경우 SensorExportWorker는 등록되지 않는다.
+
+---
+
+### 4.12 Edge Export Stage – EdgeExportWorker (Phase 3+)
 
 역할:
 - Edge 디바이스 학습/추론 파이프라인을 위한 TFLite/ONNX/Custom Binary 라벨을 생성.
 - EncodeWorker/StorageWorker가 생성한 데이터를 바탕으로 `.record`, `.npz`, `.bin`, `edge_manifest.json` 등을 만든다.
+- 기본값은 `edge.export.enabled = false`이며, 활성화 시 `edge.export.formats[]`를 설정해야 한다.
 
 Input:
 - `EncodedFrame` 참조(이미지 bytes, 파일 경로)
@@ -821,10 +1068,14 @@ edge_packages/
 manifest 확장:
 ```json
 "edgeArtifacts": [
-  {"format": "tflite-record", "path": "edge_packages/tflite/data.record", "checksum": "sha256:...", "status": "ready"},
-  {"format": "onnx-bundle", "path": "edge_packages/onnx/", "status": "failed"}
+  {"format": "tflite-record", "path": "edge_packages/tflite/data.record", "checksum": "sha256:...", "specVersion": "1.0", "status": "ready"},
+  {"format": "onnx-bundle", "path": "edge_packages/onnx/", "specVersion": "1.0", "status": "failed"}
 ]
 ```
+
+기본 정책:
+- 실패해도 세션은 유지하며, 해당 artifact만 `status="failed"`로 기록.
+- `EdgeExportArtifact` 필수 필드: `format, path, checksum, specVersion, status`.
 
 ---
 
@@ -875,6 +1126,7 @@ Output:
 - StorageQueue: 4096
 - ReIDExportQueue: 1024 (Phase 2+, optional)
 - EdgeExportQueue: 1024 (Phase 3+, optional)
+- SensorExportQueue: 512 (Phase 4+, robotics.enabled=true일 때만)
 
 각 Stage별 임계값은 Config로 조정 가능.
 
@@ -910,6 +1162,19 @@ Output:
       - `manifest.json`
       - `validation_report.json`
       - `stats.json` (선택 또는 manifest에 포함)
+      - `sensorQuality.json` (Phase 4+, robotics.enabled=true일 때)
+    - `camera_poses/`
+      - `cam01.csv` (frame_id,timestamp,position_x,position_y,position_z,rotation_w,rotation_x,rotation_y,rotation_z,speed,rolling_shutter,motion_blur)
+      - `cam02.csv`
+    - `sensors/` (Phase 4+)
+      - `lidar/`
+      - `imu/`
+      - `odom/`
+      - `depth/`
+      - `trajectory/`
+    - `slam_export/` (Phase 4+)
+      - `tum/`
+      - `kitti/`
     - `edge_packages/` (Phase 3+)
       - `tflite/`, `onnx/`, `custom_binary/` 등 Config 기반 하위 디렉터리
 
@@ -931,12 +1196,21 @@ Output:
 - session_config 요약
 - scene 목록
 - camera 목록
+- cameras[].type (`static`/`mobile`), `poseFile`(mobile일 경우 `camera_poses/camXX.csv`)
+- camera pose 기록 여부 및 pose 파일 경로(`camera_poses/`)
 - frame_count
 - detection_count
 - person_count
 - validation_summary
 - stats_summary
 - edgeArtifacts (포맷, 경로, checksum, 상태)
+- quality (예: `frameDropCount`, `droppedByJoinTimeout`, `stageStatusSummary`)
+- reidArtifacts (status 포함, optional)
+- robotics (Phase 4+):
+  - `enabled`
+  - `sensors[]` (각 센서 이름, status, outputPath, checksum)
+  - `slamArtifacts[]` (포맷, 경로, checksum, status)
+  - `sensorQualitySummary` (missingCount, latencyAvg, driftWarning)
 
 ---
 
@@ -948,6 +1222,10 @@ Output:
 - 누적 처리 frame 수
 - 평균 처리 시간(ms/frame)
 - 실패 카운트
+- 품질 관련 공통 메트릭:
+  - `metrics.frame.dropped_total` (FrameBus drop)
+  - `metrics.label.dropped_by_join_timeout_total` (LabelAssembler join timeout drop)
+  - Stage별 성공/실패(Zero-Copy 시 StageStatuses 집계)
 
 PipelineCoordinator는 이를 기반으로:
 

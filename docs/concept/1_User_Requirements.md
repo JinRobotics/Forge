@@ -1,7 +1,6 @@
 ## 1. 목적
 
-본 문서는 Forge이 사용자의 관점에서 반드시 제공해야 하는
-기능적 요구사항을 정의한다.  
+본 문서는 Forge이 사용자의 관점에서 반드시 제공해야 하는 기능적 요구사항을 정의한다.  
 모든 요구사항은 테스트·검증이 가능하도록 정량적 또는 명확한 형태로 표현한다.
 
 ---
@@ -9,7 +8,7 @@
 ## 2. 용어 정의
 
 - **Scene**: Factory/Office/Warehouse/Hospital/Military 등 미리 정의된 환경
-- **Camera**: 고정형 CCTV 또는 이동형 Robot 카메라
+- **Camera**: 고정형 감시/현장 카메라 및 이동형 로봇 카메라
 - **Frame**: 시뮬레이션 한 틱에서 생성되는 단일 이미지와 라벨 세트
 - **Global ID**: Scene/session 전체에서 동일 인물을 식별하는 정수 ID
 - **Track ID**: 카메라별 프레임 간 ID
@@ -32,7 +31,10 @@ Phase 2 이후에는 **최소 3개 Scene**을 제공해야 하며,
 - 위치/높이/방향
 - 시야각(FOV)
 - 해상도(예: 720p/1080p)  
-(값 목록은 SR에서 구체화)
+- 출력 포맷(JPG/PNG)
+- 카메라 고유 ID
+- (값 목록은 SR에서 구체화)
+- 카메라는 고정형 또는 이동형(로봇)으로 구성할 수 있으며, 이동형 카메라는 경로(waypoints)/속도/센서 노이즈(rolling shutter, motion blur)/시간 가변 extrinsic을 Config에서 정의해야 한다.
 
 ---
 
@@ -67,6 +69,7 @@ Phase별 목표:
 Phase 2부터 다음 라벨도 생성 가능해야 한다:
 - Occlusion ratio  
 - Visibility ratio  
+- ReID용 crop 이미지 export 옵션
 
 Phase 1에서는 필수 아님.
 
@@ -76,7 +79,7 @@ Phase 1에서는 필수 아님.
 시스템은 사용자 요청에 따라 다음 프레임 수를 생성할 수 있어야 한다:
 - Phase 1: 최소 100,000 프레임  
 - Phase 2: 최소 500,000 프레임  
-- Phase 3: 최소 1,000,000 프레임 이상  
+- Phase 3: 최소 1,000,000+ 프레임  
 
 ---
 
@@ -102,7 +105,8 @@ Phase 1에서는 기본 조명만 제공하면 된다.
 - 현재 프레임 번호  
 - FPS(처리 속도)  
 - 예상 완료 시간  
-- 오류 발생 여부
+- 현재 Scene / 활성 카메라 상태  
+- 오류/경고 발생 여부 (off, warn, error)
 
 업데이트 주기: 최소 1초 1회 이상
 
@@ -115,6 +119,8 @@ Phase 1에서는 기본 조명만 제공하면 된다.
   Phase 2+: YOLO / COCO
 - Phase 2+: ReID 학습용 Dataset (person_id 별 crop 이미지)
 - Phase 3+: Edge-friendly 포맷 (TFLite/ONNX 등)
+- ReID Export 시 global_person_id, camera_id, frame_id, track_id, scene_name, bbox 메타데이터가 포함되어야 한다.
+- 이동형 카메라 사용 시 frame별 extrinsic/pose 정보가 Export/manifest에 포함되어야 한다.
 
 ---
 
@@ -122,6 +128,7 @@ Phase 1에서는 기본 조명만 제공하면 된다.
 세션이 완료되면 사용자는 자동 생성된 **검증 리포트**를 확인할 수 있어야 한다:
 - 누락/손상 프레임 수  
 - bbox/라벨 값 범위 검증 결과  
+- 이미지-라벨 매칭 여부  
 - 통계 요약 (사람 수, detection 수, occlusion histogram 등)  
 표시 형식은 SR에서 정의.
 
@@ -150,3 +157,62 @@ Phase 1에서는 기본 조명만 제공하면 된다.
 - 금지 용도 안내  
 
 이 가이드는 문서 또는 UI에 제공되면 된다.
+
+---
+
+### UR-16. 품질/오류 정책 선택 (Phase 2+)
+사용자는 Session 시작 전에 품질/오류 처리 정책을 선택할 수 있어야 한다:
+- 품질 모드: strict / relaxed
+- Back-pressure 시 동작: FPS 감속 / frame skip / pause / abort
+- 오류 발생 시 정책: retry / skip / abort
+
+---
+
+### UR-17. Scene 시퀀스 설정
+사용자는 Scene 순서와 Scene별 frame 범위(duration)를 Config에서 설정할 수 있어야 한다.
+
+---
+
+### UR-18. 세션 중단/재개 (Phase 2+)
+사용자는 세션 중단 시 마지막 checkpoint부터 재개할 수 있어야 한다.
+
+---
+
+### UR-19. Config 검증 (Validation)
+사용자는 Session 시작 전에 CLI/UI를 통해 Config가 스키마·값 범위·필수 필드 요건을 충족하는지 검증 결과를 확인할 수 있어야 한다.  
+검증 실패 시 오류 메시지와 수정 포인트를 즉시 표시한다.
+
+---
+
+### UR-20. 세션 종료/중단 UX
+사용자는 Session이 정상 종료/중단/실패한 경우를 명확히 구분해 확인할 수 있어야 한다.  
+- 정상 종료: 완료 요약(프레임 수, FPS, 경고 카운트) 표시  
+- 일시 중단/재개: 현재 상태와 재개 방법 안내  
+- 실패: 원인(발생 Stage/오류 코드)과 재시도/재개 옵션 안내
+
+---
+
+### UR-21. Export 결과 구조 선택
+사용자는 Export 시 디렉터리/파일 구성 스킴을 선택할 수 있어야 한다(예: 단일 Session 루트 vs 세션ID 기반 하위 디렉터리).  
+선택한 스킴은 manifest에 기록되어야 한다.
+
+---
+
+### UR-22. 로그/진행 상태 저장 (Resume 친화)
+사용자는 Session 진행 로그와 상태 요약을 파일로 저장하도록 설정할 수 있어야 하며,  
+Resume 시 이 정보를 활용해 이어서 진행할 수 있어야 한다.
+
+---
+
+### UR-23. UI/CLI 사용성
+- 실행 전 주요 프롬프트(출력 경로, config 확인, 품질/오류 정책 선택 등)를 제공한다.
+- 실행 중 진행률/FPS/경고 요약을 1초 이상 주기로 표시한다.
+- 실행 후 요약(프레임 수, 드롭/재시도/경고, 출력 경로, manifest 위치)을 제공한다.
+
+---
+
+## 4. 고급/선택 요구사항 (기업 운영 관점)
+- strict/relaxed 품질 모드 노출 및 드롭/재시도 카운트 UI 제공
+- Scene 시퀀스 프리뷰 및 예상 소요 시간 표시
+- 오류 발생 시 정책 선택(continue/retry/abort)을 UI/CLI에서 직접 지정
+- Liveness/Readiness 상태와 `/status` 요약 지표를 운영 대시보드(Grafana 등)로 확인 가능

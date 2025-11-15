@@ -21,9 +21,9 @@ API 계약을 명확히 함으로써 레이어 간 결합도를 낮추고 기능
 
 ## 3. Orchestration ↔ Simulation API
 
-본 API는 **Simulation Gateway 모드**가 `remote` 또는 `distributed`일 때 적용된다.  
-기본 모드(InProcessUnityBridge)에서는 동일 프로세스 내에서 직접 메서드 호출을 사용하므로 HTTP 트래픽이 발생하지 않는다.  
-Config에서 `simulation.gateway.mode=os-process` 혹은 `distributed`를 설정하면 Orchestration Layer가 본 명세에 맞춰 HTTP 클라이언트를 활성화한다.
+본 API는 **Simulation Gateway 모드**가 `remote` 또는 `distributed`일 때 적용된다.
+기본 모드(`InProcessSimulationGateway`)에서는 동일 프로세스 내에서 직접 메서드 호출을 사용하므로 HTTP 트래픽이 발생하지 않는다.
+Config에서 `simulation.gateway.mode=remote` 혹은 `distributed`를 설정하면 Orchestration Layer가 `HttpSimulationGateway`를 사용하여 본 명세에 맞춰 HTTP 클라이언트를 활성화한다.
 
 ### 3.1 통신 모델
 
@@ -33,7 +33,10 @@ Config에서 `simulation.gateway.mode=os-process` 혹은 `distributed`를 설정
 - **보안/인증 옵션 (NFR-12 대응)**:
   - 기본 모드: `127.0.0.1`에만 바인딩하며 인증 생략.
   - `remote/distributed` 모드: mTLS 혹은 API Key 필수. 기본 바인딩은 `127.0.0.1`; 필요 시 `allowedHosts`에 명시한 주소만 허용.
+  - `/status`를 포함해 **모든 엔드포인트**에 동일 인증을 강제한다. 무인증 상태 조회 금지.
   - HTTP 헤더 `X-Api-Key`(단일 키) 또는 `Authorization: Bearer <token>` 사용 가능. CLI/Config에서 `simulation.gateway.auth.*`로 설정.
+  - 보안 가이드(`docs/design/10_Security_and_Compliance.md`)의 “접근 제어/데이터 격리” 원칙을 준수하며, 운영 시 `/status` 노출 범위를 내부 대시보드로 한정한다.
+  - **필수 구성**: `HttpAuthMiddleware`(Class Design 문서)와 `ConfigSanitizer`를 API 서버 파이프라인에 포함하여 인증/허용 호스트/민감정보 필터링을 일관되게 적용한다.
 - **재시도 권장 정책**:
   - 네트워크 타임아웃/5xx 응답 시 지수 백오프(초기 1초, 최대 5회)로 재시도
   - 4xx는 클라이언트 오류로 간주하고 즉시 사용자에게 전파
@@ -142,14 +145,24 @@ Config에서 `simulation.gateway.mode=os-process` 혹은 `distributed`를 설정
   "targetFrame": 100000,
   "fps": 14.5,
   "activeScene": "Factory",
-  "queueDepths": {
-    "capture": 12,
-    "encode": 420
-  },
+  "queueDepthSummary": 0.42,
+  "mobileCameras": [
+    {"id": "bot_cam_01", "poseTimestamp": 12345, "position": [1.2, 0.5, -3.0], "rotationEuler": [0, 45, 0]}
+  ],
   "supportedVersions": ["v1", "v1beta"],
   "authMode": "api-key"
 }
 ```
+
+보안/노출 최소화:
+- `queueDepthSummary`는 워커별 상세를 숨기고 0~1 스칼라(최대 큐 사용률)만 제공한다.
+- 내부 리소스 경로, 사용자명 등 민감 정보는 `/status` 응답에 포함하지 않는다.
+- 인증이 없는 요청은 401로 거부하며, 로컬 바인딩 모드라도 프런트엔드/CLI 외 노출을 금지한다.
+- 구현 체크리스트:
+  - 인증 미들웨어가 `/status`에도 적용되는지 통합 테스트한다.
+  - `allowedHosts` 설정이 적용되어 원격 접근이 제한되는지 확인한다.
+  - 상태 응답이 내부 상세(큐별 길이, 경로) 대신 요약 지표만 반환하는지 계약 테스트로 고정한다.
+  - 이동형 카메라가 존재할 경우 pose 요약(최대 위치/회전 변화량 등)만 제공하고, 세부 궤적은 인증된 manifest/로그에서 확인하도록 한다.
 
 CLI/SDK 구성 시:
 - `dotnet run -- --api-key <KEY>` 형식으로 API Key를 전달하거나,
@@ -195,12 +208,30 @@ CLI/SDK 구성 시:
 
 | 필드 | 타입 | 설명 |
 |------|------|------|
-| `id` | string | 고유 카메라 식별자 (`cam01` 등) |
+| `id` | string | 고유 카메라 식별자 (`cam01`, `bot_cam_01` 등) |
+| `type` | string | `static` 또는 `mobile`. 기본값 `static`. |
 | `resolution` | string | `"WxH"` 형식. 내부에서 숫자 배열로 파싱 |
 | `fov` | number | 수평 FOV (도) |
-| `position` | float[3] | Unity world 좌표 |
-| `rotation` | float[3] | Euler 각 |
-| `sensorNoise` | object | (선택) 감마/노이즈 옵션 |
+| `position` | float[3] | 초기 Unity world 좌표. mobile 타입일 경우 시작 포즈. |
+| `rotation` | float[3] | 초기 Euler 각 |
+| `sensorNoise` | object | (선택) 감마/노이즈/rolling shutter/motion blur 옵션 |
+| `mobile` | object | `type="mobile"`일 때 필수. 아래 상세 |
+
+**`mobile` 객체 스키마 (필수/선택 필드)**
+
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| `path.waypoints[]` | array | 각 waypoint는 `{ "position": [x,y,z], "waitSeconds": <float?> }` 형태. 최소 2개 필수. |
+| `path.loop` | bool | 마지막 waypoint 이후 처음으로 반복 여부. 기본 `false`. |
+| `path.maxSpeed` | number | m/s 단위 최대 이동 속도. |
+| `path.maxAngularSpeed` | number | deg/s 단위 회전 한계. |
+| `path.navmeshArea` | string? | (선택) 이동에 사용할 NavMesh 영역 이름. |
+| `controller` | object | PID/보간 파라미터 (`positionGain`, `rotationGain` 등). 옵션이지만 기본값 제공. |
+| `sensor.rollingShutter` | bool | rolling shutter 시뮬레이션 여부. |
+| `sensor.motionBlur.exposureMs` | number | motion blur 노출 시간(ms). |
+| `poseLogging.enabled` | bool | pose 기록 여부 (기본 true). |
+| `poseLogging.sampleRate` | number | pose 샘플링 주기(Hz). 생략 시 1frame=1sample. |
+| `poseLogging.output` | string | 사용자 정의 pose 파일 경로 (기본 `camera_poses/{cameraId}.csv`). |
 
 ### 4.4 Simulation Gateway 섹션
 
@@ -220,17 +251,17 @@ Config 예시:
 
 | 필드 | 필수 | 설명 |
 |------|------|------|
-| `mode` | ✅ | `inprocess`, `remote`, `distributed` 중 선택. Orchestration이 사용할 `SimulationGateway` 타입을 결정한다. |
+| `mode` | ✅ | `inprocess`, `remote`, `distributed` 중 선택. Orchestration이 사용할 `ISimulationGateway` 구현 타입을 결정한다. |
 | `host` / `port` | remote+ | HTTP 모드에서 바인딩할 주소. 기본 `127.0.0.1:8080`. |
 | `auth.type` | remote+ | `none`, `api-key`, `mtls`. `mode=inprocess`일 때 자동으로 `none`. |
 | `auth.apiKeyEnv` | api-key | CLI/서비스가 사용할 환경 변수명. 없으면 Config에 직접 키를 저장하지 않는 것이 원칙. |
 | `auth.certPath`/`keyPath` | mtls | mTLS 구성에 필요한 인증서 경로. |
 | `allowedHosts[]` | remote+ | HTTP 서버가 수락할 호스트 화이트리스트. 기본 `["127.0.0.1"]`. |
 
-**적용 규칙**
-- `mode=inprocess`: Unity 프로세스 내부 MonoBehaviour → `UnityBridge`. HTTP 설정 무시.
-- `mode=remote`: Unity가 별도 프로세스. `/session/*` REST API를 사용하며 API Specification §3 전체 적용.
-- `mode=distributed`: Master/Worker 통신은 §8 분산 아키텍처와 동일하며, Worker 측 SimulationGateway는 보통 `remote` 모드를 사용한다.
+**적용 규칙 및 구현 클래스**
+- `mode=inprocess`: Unity 프로세스 내부에서 `InProcessSimulationGateway` (MonoBehaviour) 사용. HTTP 설정 무시.
+- `mode=remote`: Unity가 별도 프로세스. Orchestration은 `HttpSimulationGateway` 사용하여 `/session/*` REST API 호출. API Specification §3 전체 적용.
+- `mode=distributed`: Master/Worker 통신은 §8 분산 아키텍처와 동일하며, Worker 측은 `HttpSimulationGateway`를 통해 `remote` 모드로 동작.
 - NFR-12 준수를 위해 remote/distributed 모드에서는 반드시 `auth.type`과 `allowedHosts`를 명시한다.
 
 ### 4.4 Crowd & Behavior

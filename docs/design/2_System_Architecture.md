@@ -4,7 +4,7 @@ Forge
 
 > **문서 버전:** v2.0 (2025-02-15)
 > **변경 이력:**
-> - v2.0 (2025-02-15): Unity 의존성 격리(UnityBridge), 분산 아키텍처 설계 추가, Back-pressure 알고리즘 구체화
+> - v2.0 (2025-02-15): Unity 의존성 격리(ISimulationGateway), 분산 아키텍처 설계 추가, Back-pressure 알고리즘 구체화
 > - v1.1 (2025-02-14): `/status` 버전/인증 노출 및 PipelineCoordinator 모니터링 지침 추가
 > - v1.0 (2024-12-01): 초기 작성
 
@@ -192,17 +192,36 @@ graph TB
   - 전환: Enable/Disable로 활성 Scene 전환
 - 환경 변경 시 Camera/Crowd 설정 업데이트 트리거
 
+#### 3.2.3-A SceneTransitionService (책임 분리)
+
+- `ScenarioManager`가 다음 Scenario로 이동할 때 호출되는 전환 서비스.
+- 책임:
+  - Scene 활성화/비활성화
+  - Crowd/PersonState 마이그레이션(Global ID 유지)
+  - NavMesh/조명/시간대/랜덤화 파라미터 적용
+- GenerationController는 이 서비스를 호출만 하고, 전환 세부 로직은 알지 않는다.
+
+**개념 시퀀스:**
+```
+ScenarioManager → SceneTransitionService → EnvironmentService: ActivateScene()
+                                   → CrowdService: Migrate(GlobalID 유지)
+                                   → TimeWeatherService: Apply(time/weather)
+                                   → CameraService: ReconfigureIfNeeded()
+```
+
 #### 3.2.4 GenerationController
 
 - **메인 프레임 루프** 담당
-- **Unity 독립성**: Unity API에 직접 의존하지 않고, IFrameProvider 인터페이스를 통해 프레임 틱을 수신
-- 각 프레임마다 다음을 수행:
+- **Unity 독립성**: Unity API에 직접 의존하지 않고, `ISimulationGateway`/`IFrameProvider` 추상화를 통해 프레임 틱을 수신
+- 각 프레임마다 다음을 수행(핵심 책임만):
   1. 활성 `ScenarioContext`에 맞춰 SimulationLayer 업데이트 요청
   2. `FrameContext` 생성 (frame_id, timestamp, scenario 정보)
   3. `FrameBus`를 통해 Data Pipeline Layer로 Frame 이벤트 전달
-- PipelineCoordinator의 back-pressure 신호를 확인하여:
-  - 프레임 생성 속도 조절 (FPS 감소, frame skip 등)
-  - Session 일시정지/중단 처리
+- PipelineCoordinator의 back-pressure 신호와 `IFrameRatePolicy` 결과를 확인하여:
+  - 프레임 생성/skip/일시정지 여부 결정
+  - FPS 조절 적용
+- **주의**: Scene 전환 + Crowd migration 로직은 `ScenarioManager` 혹은 별도 `SceneTransitionService`에서 수행하여 GenerationController의 책임을 최소화한다.
+- **시간축 정의**: `FrameContext.timestamp`는 시뮬레이션 월드 시간(Scenario/TimeWeather 기준)을 사용한다. 재현성 기준은 frame_id/frame_index이며, wall-clock 지연과 무관하게 frame_id 순서를 신뢰한다.
 
 **주요 메서드:**
 ```csharp
@@ -228,15 +247,9 @@ class GenerationController {
         // Scene 전환 체크 (Phase 2+)
         var scenario = _scenarioManager.GetCurrent();
         if (_currentFrame >= scenario.EndFrame && _scenarioManager.MoveNext()) {
-            // 다음 Scenario로 전환
+            // Scene/Crowd 전환 책임은 SceneTransitionService가 담당
             scenario = _scenarioManager.GetCurrent();
-
-            // 1. Scene 활성화
-            _environmentCoordinator.ActivateScene(scenario.SceneName);
-
-            // 2. PersonState 마이그레이션 (Global ID 보존)
-            var targetNavMesh = _environmentService.GetNavMesh(scenario.SceneName);
-            _crowdService.MigrateToScene(scenario.SceneName, targetNavMesh);
+            _sceneTransitionService.TransitionTo(scenario);
         }
 
         // 프레임 생성
@@ -263,6 +276,24 @@ class GenerationController {
 }
 ```
 
+#### 3.2.4-A FrameRatePolicy (정책 분리)
+
+- 역할: Back-pressure, 사용자 설정(quality-first / speed-first / balanced) 등을 종합해 프레임 생성/skip/일시정지를 결정.
+- 인터페이스 예시:
+```csharp
+public interface IFrameRatePolicy {
+    FrameGenerationDecision Decide(BackPressureLevel level, SessionConfig config, long currentFrame);
+}
+
+public enum FrameGenerationDecision {
+    Generate,
+    Skip,
+    Pause
+}
+```
+- GenerationController는 정책 객체 결과만 반영하여 if/else 증가를 피한다.
+- Config에서 정책을 선택할 수 있도록 확장 (예: `frameRatePolicy: "quality-first"`).
+
 #### 3.2.5 PipelineCoordinator
 
 - Data Pipeline Layer의 각 Worker Queue 상태를 모니터링
@@ -273,7 +304,12 @@ class GenerationController {
   - 재시도/skip/세션 중단 결정
 - 진행률 계산:
   - 처리된 frame 수 / 목표 frame 수 / 예상 완료 시간 → ProgressReporter로 전달
-  - `/status` API에서 수집한 `engineVersion`, `supportedVersions`, `authMode`를 함께 노출하여 모니터링/운영 대시보드가 버전 불일치나 인증 모드를 즉시 파악할 수 있도록 한다.
+  - `/status` API에서 수집한 `engineVersion`, `supportedVersions`, `authMode`를 함께 노출하여 모니터링/운영 대시보드가 버전 불일치나 인증 모드를 즉시 파악할 수 있도록 한다. 이때 `/status`는 다른 엔드포인트와 동일한 인증을 강제하고 워커별 큐 깊이 대신 요약값(최대 큐 사용률)을 반환해 내부 토폴로지 노출을 최소화한다.
+- 구현 체크리스트:
+  - 인증 미들웨어가 `/status`에도 적용되는지 통합 테스트로 확보한다.
+  - `/status`는 내부 Liveness/Readiness/Prometheus pull 용도로 사용하고, UI는 Grafana 등 대시보드 경유로 본다.
+  - 상태 응답은 요약 지표만 제공하고 내부 큐 상세·경로·호스트 정보를 포함하지 않는다.
+  - `allowedHosts`/바인딩 범위 설정이 적용되어 원격 접근이 제한되는지 운영 구성에서 검증한다.
 
 **Back-pressure 알고리즘 (구체화):**
 ```csharp
@@ -313,11 +349,11 @@ public enum BackPressureLevel {
 역할:
 - 실제 3D 환경에서 사람/카메라/조명/날씨를 시뮬레이션
 - 각 프레임에 대해 ground truth 상태를 생성
-- Unity 메인 스레드에서 실행되며, **UnityBridge를 통해 Orchestration Layer와 통신**
+- Unity 메인 스레드에서 실행되며, **ISimulationGateway를 통해 Orchestration Layer와 통신**
 
 주요 컴포넌트:
 
-- `UnityBridge` (Unity ↔ Orchestration 인터페이스)
+- `ISimulationGateway` (Unity ↔ Orchestration 인터페이스 추상화)
 - `EnvironmentService`
 - `CameraService`
 - `CrowdService`
@@ -325,61 +361,112 @@ public enum BackPressureLevel {
 - `TimeWeatherService`
 - `VisibilityService` (Phase 2+의 Occlusion 등 일부 기능만)
 
-#### 3.3.0 SimulationGateway (UnityBridge / HTTP Adapter)
+#### 3.3.0 SimulationGateway (ISimulationGateway 인터페이스)
 
 **역할:**
 - Orchestration Layer가 Simulation Layer에 접근하는 표준 인터페이스.
-- 모드에 따라 `InProcessUnityBridge`(Unity와 동일 프로세스) 또는 `HttpSimulationGateway`(별도 프로세스/노드)를 선택한다.
-- IFrameProvider/IUnitySimulationApi 등의 추상화를 통해 GenerationController는 통신 방식과 무관하게 동일한 계약을 사용한다.
+- 모드에 따라 `UnitySimulationGateway`(Unity와 동일 프로세스) 또는 `HttpSimulationGateway`(별도 프로세스/노드)를 선택한다.
+- `ISimulationGateway` 인터페이스를 통해 GenerationController는 통신 방식과 무관하게 동일한 계약을 사용한다.
 
-**모드 구성:**
-
-| 모드 | 설명 | 보안 기본값(NFR-12) | 적용 Phase |
-|------|------|--------------------|------------|
-| InProcessUnityBridge | Unity가 동일 프로세스에서 실행되며 MonoBehaviour가 `GenerationController`를 직접 호출 | 프로세스 내부, 별도 인증 불필요 | Phase 1 기본 |
-| HttpSimulationGateway | Unity가 별도 프로세스/노드로 `/api/simulation` HTTP 서버 제공, Orchestration은 REST 클라이언트로 제어 | 기본 바인딩 `127.0.0.1`; 분산 시 mTLS/API Key 필수 | Phase 2+ (원격/분산) |
-
-**InProcessUnityBridge 예시:**
+**인터페이스 정의:**
 ```csharp
-public class UnityBridge : MonoBehaviour, IFrameProvider {
-    private GenerationController _controller;
+public interface ISimulationGateway
+{
+    Task InitializeAsync(SessionConfig config);
+    Task<FrameGenerationResult> GenerateFrameAsync(int frameId);
+    Task<SceneState> GetCurrentSceneStateAsync();
+    IReadOnlyList<CameraMeta> GetActiveCameras();
+    IReadOnlyList<CameraPose> GetCameraPoses();
+    void Shutdown();
+}
+```
+
+**모드별 구현:**
+
+| 모드 | 구현 클래스 | 설명 | 보안 기본값(NFR-12) | 적용 Phase |
+|------|------------|------|--------------------|------------|
+| InProcess | `UnitySimulationGateway` | Unity가 동일 프로세스에서 실행되며 MonoBehaviour가 직접 메서드 호출 | 프로세스 내부, 별도 인증 불필요 | Phase 1 기본 |
+| HTTP | `HttpSimulationGateway` | Unity가 별도 프로세스/노드로 `/api/simulation` HTTP 서버 제공, Orchestration은 REST 클라이언트로 제어 | 기본 바인딩 `127.0.0.1`; 분산 시 mTLS/API Key 필수 | Phase 2+ (원격/분산) |
+| Mock | `MockSimulationGateway` | 테스트용 구현체, Unity 없이 테스트 데이터 반환 | N/A | 테스트 전용 |
+
+**UnitySimulationGateway 예시:**
+```csharp
+public class UnitySimulationGateway : MonoBehaviour, ISimulationGateway {
     private CameraService _cameraService;
     private CrowdService _crowdService;
+    private EnvironmentService _environmentService;
+    private KinectPoseProvider _cameraPoseProvider; // 카메라 pose 제공 (예시)
 
-    void Start() {
-        _controller = new GenerationController(
-            frameProvider: this,
-            scenarioManager: _scenarioManager,
-            frameBus: _frameBus,
-            pipelineCoordinator: _pipelineCoordinator
-        );
+    public async Task InitializeAsync(SessionConfig config) {
+        // Scene 로드, 카메라 초기화, Crowd 생성
+        await _environmentService.LoadSceneAsync(config.Scenes[0].Name);
+        _cameraService.InitializeCameras(config.Cameras);
+        _crowdService.SpawnInitialCrowd(config.Crowd);
     }
 
-    void Update() {
-        _controller.OnFrameTick(Time.deltaTime);
+    public async Task<FrameGenerationResult> GenerateFrameAsync(int frameId) {
+        // Unity Update() 루프에서 호출
+        var personStates = _crowdService.GetAgents()
+            .Select(a => a.ToPersonState())
+            .ToList();
+
+        var frameContext = new FrameContext {
+            FrameId = frameId,
+            Timestamp = _timeWeatherService.GetSimulationTime(), // 시뮬레이션 월드 시간
+            SceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name,
+            PersonStates = personStates
+        };
+
+        var images = _cameraService.CaptureAllCameras();
+        return new FrameGenerationResult(frameContext, images);
     }
 
-    public List<CameraMeta> GetActiveCameras() =>
+    public IReadOnlyList<CameraMeta> GetActiveCameras() =>
         _cameraService.GetActiveCameras()
             .Select(cam => cam.GetMetadata())
             .ToList();
 
-    public SceneState GetCurrentSceneState() => new SceneState {
+    public IReadOnlyList<CameraPose> GetCameraPoses() =>
+        _cameraPoseProvider?.GetCurrentPoses() ?? Array.Empty<CameraPose>();
+
+    public async Task<SceneState> GetCurrentSceneStateAsync() => new SceneState {
         SceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name,
         Persons = _crowdService.GetAgents().Select(a => a.ToPersonState()).ToList()
     };
+
+    public void Shutdown() {
+        _crowdService.DespawnAll();
+        _cameraService.Cleanup();
+    }
 }
 ```
 
 **HttpSimulationGateway 개념:**
-- Orchestration Layer는 `ISimulationApiClient`를 통해 API Specification 문서에 정의된 REST 엔드포인트(`/session/init`, `/session/start`, `/status` 등)를 호출한다.
+- Orchestration Layer는 `HttpSimulationGateway` 클라이언트를 통해 API Specification 문서에 정의된 REST 엔드포인트(`/session/init`, `/session/start`, `/status` 등)를 호출한다.
 - Unity 측은 동일 엔드포인트를 노출하는 WebHost를 실행하며, 인증/바인딩 설정은 Config(`simulation.gateway.mode=remote`)에 포함한다.
-- GenerationController는 HTTP 모드에서도 동일한 `IFrameProvider` 계약을 사용하도록 Bridge가 WebSocket/HTTP 스트림을 통해 FrameState 이벤트를 제공한다.
+- HTTP 모드에서도 동일한 `ISimulationGateway` 계약을 유지하며, HTTP 호출을 내부적으로 처리한다.
+
+**FrameGenerationResult(예시 DTO):**
+```csharp
+public record FrameGenerationResult(
+    FrameContext Frame,
+    IReadOnlyList<RawImageData> Images
+);
+
+public record CameraPose(
+    string CameraId,
+    Matrix4x4 Extrinsic,
+    Vector3 Position,
+    Quaternion Rotation,
+    float Timestamp
+);
+```
 
 **장점:**
 - ✅ GenerationController를 Unity 없이 단위 테스트 가능
 - ✅ Mock 구현으로 빠른 통합 테스트
 - ✅ Unity 버전 업그레이드 시 영향 최소화
+
 
 #### 3.3.1 EnvironmentService
 
@@ -393,6 +480,7 @@ public class UnityBridge : MonoBehaviour, IFrameProvider {
 - 카메라 위치/FOV/해상도 상태 유지
 - 각 프레임마다 “활성 카메라 목록 + 카메라 메타데이터” 제공
 - 카메라별 `camera_id` 관리
+- 이동형 카메라 pose 업데이트: `MobileCameraController`와 협력하여 경로/속도/pose 적용, `CameraPoseProvider`를 통해 프레임별 pose 기록
 
 #### 3.3.3 CrowdService
 
@@ -459,6 +547,81 @@ class CrowdService : MonoBehaviour {
 - Occlusion/Visibility 위한 기초 정보 (예: 시야에 있는지 여부)만 Simulation에서 계산
 - 구체적인 ratio 계산은 Data Pipeline 레벨에서 수행 가능하도록 메타만 제공
 
+#### 3.3.4 MobileCameraController
+
+역할:
+- 이동형 카메라(로봇/AGV/드론 장착 카메라)의 경로 추종 및 포즈 업데이트를 담당.
+- CameraService와 협력하여 FrameContext/CameraPose 데이터를 최신 상태로 유지.
+
+주요 책임:
+- Config 기반 경로(waypoints) 파싱 및 PathPlanner 실행
+- 속도/가속도/회전 제약 적용 (maxSpeed, maxAngularSpeed)
+- NavMesh/Collision 시스템과 연동해 충돌 회피 (옵션)
+- Simulation Tick마다 카메라 포즈 업데이트 및 Sensor noise(rolling shutter/motion blur) 적용
+- PoseRecorder를 통해 프레임별 pose(t, position, rotation, extrinsic) 기록 → `CameraPoseProvider`
+
+구성 요소:
+- PathPlanner: Waypoints → 연속 경로(Spline/Bezier/Catmull-Rom) 생성
+- MotionController: PID/보간 알고리즘으로 위치·회전 제어
+- PoseRecorder: CameraPose 데이터를 FrameContext/manifest로 전달
+
+Config 필드 예시:
+```json
+"cameras": [
+  {
+    "id": "bot_cam_01",
+    "type": "mobile",
+    "path": {
+      "waypoints": [
+        {"position": [0, 1.5, 0], "waitSeconds": 0},
+        {"position": [5, 1.5, 3], "waitSeconds": 1}
+      ],
+      "loop": true,
+      "maxSpeed": 1.5,
+      "maxAngularSpeed": 45
+    },
+    "sensor": {
+      "rollingShutter": true,
+      "motionBlur": {"exposureMs": 16.7}
+    }
+  }
+]
+```
+
+Simulation 흐름:
+`GenerationController` → `MobileCameraController.Update(deltaTime)` → `CameraService` pose 반영 → FrameBus Publish 시 `CameraPose` 포함
+
+---
+
+#### 3.3.7 MultiSimSyncCoordinator & IRoboticsGateway (Phase 4+)
+
+Phase 4에서 로봇 센서/SLAM을 통합하려면 Unity Simulation과 Isaac Sim(또는 동등한 로봇 백엔드)을 동시에 구동해야 한다. MultiSimSyncCoordinator는 `ISimulationGateway`(Unity)와 `IRoboticsGateway`(Isaac) 사이의 중재자 역할을 하며 다음 책임을 가진다.
+
+- 동일 FrameId/deltaTime으로 두 엔진에 Step 요청
+- `syncPolicy`(maxDelayMs, timeoutMs, onTimeout)를 적용해 Isaac 지연을 처리
+- 반환된 `FrameGenerationResult` + `RoboticsStepResult`를 병합해 `FrameContext`에 `RobotPose`, `SensorMeta` 추가
+- Time Sync 오차가 허용치를 넘으면 품질 모드에 따라 경고/세션 중단
+
+구현 개념:
+```csharp
+public class MultiSimSyncCoordinator
+{
+    private readonly ISimulationGateway _unity;
+    private readonly IRoboticsGateway _isaac;
+
+    public async Task<FrameContext> StepAsync(long frameId, float deltaTime)
+    {
+        var unityTask = _unity.GenerateFrameAsync((int)frameId);
+        var isaacTask = _isaac.StepAsync(frameId, deltaTime);
+        await Task.WhenAll(unityTask, isaacTask);
+
+        return FrameContextExtensions.Merge(unityTask.Result, isaacTask.Result);
+    }
+}
+```
+
+`IRoboticsGateway`는 Isaac RPC/REST/gRPC를 캡슐화하며 Pose/LiDAR/IMU/Odom/Depth 데이터를 Frame-aligned 형태로 제공한다. 자세한 설계는 `docs/design/12_Robotics_Extension.md` 참고.
+
 ---
 
 ### 3.4 Data Pipeline Layer
@@ -483,6 +646,7 @@ class CrowdService : MonoBehaviour {
 - `LabelAssembler`
 - `EncodeWorker`
 - `StorageWorker`
+- `SensorExportWorker` (Phase 4+, robotics.enabled 시)
 - `ValidationService`, `StatsService`, `ManifestService`
 
 #### 3.4.1 FrameBus

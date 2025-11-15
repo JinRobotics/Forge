@@ -49,6 +49,10 @@
 - 분산 환경에서 다중 Worker 조율 시 고려
 - SQLite → PostgreSQL 마이그레이션 경로 제공
 
+**보안/Config 필터링 교차 참조**:
+- `docs/design/10_Security_and_Compliance.md` “Config/Log 민감 정보 필터링 표”에 정의된 규칙을 그대로 적용한다.
+- `docs/design/5_API Specification.md` 설정/상태 API에서도 동일한 필터링/마스킹 규칙을 사용해 일관성을 유지한다.
+
 ---
 
 ## 3. 데이터베이스 구조
@@ -60,6 +64,7 @@ erDiagram
     SESSION ||--o{ CHECKPOINT : has
     SESSION ||--o{ STATISTICS : has
     SESSION ||--o{ VALIDATION_RESULT : has
+    SESSION ||--o{ CAMERA_POSE_META : records
     SESSION ||--o{ JOB_QUEUE : schedules
     WORKER_NODE ||--o{ JOB_QUEUE : executes
     WORKER_NODE ||--o{ WORKER_HEARTBEAT : reports
@@ -138,6 +143,21 @@ erDiagram
         datetime scheduled_at
         datetime completed_at
     }
+
+    CAMERA_POSE_META {
+        int id PK
+        string session_id FK
+        string camera_id
+        string pose_file_path
+        int sample_count
+        real total_distance_m
+        real max_speed_mps
+        real max_angular_speed_dps
+        datetime first_timestamp
+        datetime last_timestamp
+        string checksum
+        string notes
+    }
 ```
 
 ---
@@ -176,6 +196,7 @@ CREATE TABLE IF NOT EXISTS session (
     -- 설정 (JSON)
     config_json TEXT NOT NULL,
         -- SessionConfig 전체를 JSON으로 저장
+        -- 저장 전에 API Key/Bearer Token/사용자 경로 등 민감 필드는 제거 또는 마스킹해야 함 (보안 가이드 연계)
 
     -- 메타
     engine_version TEXT NOT NULL,
@@ -192,6 +213,11 @@ CREATE INDEX idx_session_status ON session(status);
 CREATE INDEX idx_session_created_at ON session(created_at DESC);
 CREATE INDEX idx_session_completed_at ON session(completed_at DESC);
 ```
+
+보안 지침:
+- `config_json`은 인증키, 토큰, 사용자 홈 디렉터리 등 민감 필드를 포함하지 않도록 사전에 필터링/마스킹한다.
+- 꼭 필요한 비밀(예: API Key)을 보관해야 한다면 별도 보안 저장소(환경 변수/OS 키체인/암호화 컬럼)에 보관하고, DB에는 참조 키만 저장한다.
+- 로그/감사 목적에도 민감 필드를 남기지 않도록 DAO/Repository 레이어에서 공통 Sanitizer를 적용한다.
 
 ---
 
@@ -324,7 +350,41 @@ CREATE INDEX idx_validation_is_valid ON validation_result(is_valid);
 
 ---
 
-### 4.5 WORKER_NODE 테이블 (Phase 3)
+### 4.5 CAMERA_POSE_META 테이블 (Phase 2+)
+
+역할:  
+- `type=mobile` 카메라 pose 파일 경로와 품질 요약(샘플 수, 이동 거리, 속도)을 저장하여 Manifest/API/Resume 로직이 동일한 소스를 참조하게 한다.
+
+```sql
+CREATE TABLE IF NOT EXISTS camera_pose_meta (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    camera_id TEXT NOT NULL,
+    pose_file_path TEXT NOT NULL,
+    sample_count INTEGER NOT NULL,
+    total_distance_m REAL NOT NULL,
+    max_speed_mps REAL NOT NULL,
+    max_angular_speed_dps REAL NOT NULL,
+    first_timestamp DATETIME NOT NULL,
+    last_timestamp DATETIME NOT NULL,
+    checksum TEXT,
+    notes TEXT,
+    FOREIGN KEY (session_id) REFERENCES session(session_id)
+        ON DELETE CASCADE
+);
+
+CREATE INDEX idx_pose_session ON camera_pose_meta(session_id);
+CREATE INDEX idx_pose_camera ON camera_pose_meta(camera_id);
+```
+
+저장 규칙:
+- PoseRecorder flush 직후 1행 per camera upsert.
+- `notes` 필드는 Validation 결과(허용 편차 초과 등)를 요약하여 `/status`와 manifest quality 항목과 일치시킨다.
+- Resume 시 MobileCameraController는 `pose_file_path`와 `last_timestamp`를 조회하여 pose CSV 이어쓰기 위치를 결정한다.
+
+---
+
+### 4.6 WORKER_NODE 테이블 (Phase 3)
 
 역할: 분산 환경에서 Master가 Worker 상태/용량/할당을 추적한다.
 
@@ -353,7 +413,7 @@ CREATE INDEX idx_worker_session ON worker_node(session_id);
 
 ---
 
-### 4.6 WORKER_HEARTBEAT 테이블 (Phase 3)
+### 4.7 WORKER_HEARTBEAT 테이블 (Phase 3)
 
 역할: Worker의 실시간 자원 사용량과 큐 상태를 수집하여 장애 감지/알림에 활용한다.
 
@@ -377,7 +437,7 @@ CREATE INDEX idx_worker_heartbeat_time ON worker_heartbeat(reported_at DESC);
 
 ---
 
-### 4.7 JOB_QUEUE 테이블 (Phase 3)
+### 4.8 JOB_QUEUE 테이블 (Phase 3)
 
 역할: 분산 아키텍처의 ScenarioTask/FrameRange 작업을 관리한다.
 

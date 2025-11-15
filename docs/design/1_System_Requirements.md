@@ -1,11 +1,3 @@
-Forge
-
----
-
-> **문서 버전:** v1.1 (2025-02-14)  
-> **변경 이력:**  
-> - v1.1 (2025-02-14): 문서 버전/변경 이력 섹션 추가, 인증/파이프라인 요구 최신화  
-> - v1.0 (2024-12-01): 초기 작성
 
 ## 1. 문서 목적
 
@@ -88,6 +80,7 @@ Scene 전환은 **Session 중간에 1회 이상** 발생할 수 있다.
 - FOV  
 - 출력 이미지 포맷  
 - 카메라 고유 ID
+- 고정형/이동형 모두 지원하며, 이동형 카메라의 경우 경로(waypoints), 속도, 센서 노이즈(rolling shutter/motion blur), 프레임별 extrinsic 변화를 Config에 정의하고 Simulation/Label에 반영해야 한다.
 
 ### **FR-06. 카메라 메타데이터 제공**
 각 카메라에 대해:
@@ -95,7 +88,8 @@ Scene 전환은 **Session 중간에 1회 이상** 발생할 수 있다.
 - extrinsic  
 - 해상도  
 - 카메라 ID  
-를 라벨/manifest에 포함해야 한다.
+를 라벨/manifest에 포함해야 한다.  
+- 이동형 카메라의 경우 프레임별 extrinsic, 경로/속도 정보, 센서 노이즈 파라미터(rolling shutter/motion blur)를 메타데이터로 포함해야 한다.
 
 ---
 
@@ -123,6 +117,10 @@ Scene 전환은 **Session 중간에 1회 이상** 발생할 수 있다.
 
 ### **FR-11. 프레임 루프 실행**
 시스템은 Frame 단위로 Simulation → Capture → Pipeline 실행을 반복해야 한다.
+
+### **FR-11-1. 프레임 생성 제어**
+시스템은 Back-pressure 상태에 따라 Frame 생성 속도를 조절하거나 Frame Skip을 수행할 수 있어야 한다.  
+품질 모드가 **strict**인 경우 Frame Skip은 허용되지 않으며, Back-pressure 발생 시 세션을 PAUSE 또는 FAIL로 처리해야 한다.
 
 ### **FR-12. 시간/조명 환경 설정**
 사용자는 Config에서:
@@ -158,7 +156,7 @@ Scene/session 전체에서 동일 인물의 Global ID는 변하지 않아야 한
 Export 형식:
 - person_id 별 디렉토리 구조
 - 각 인물의 bbox crop 이미지
-- camera_id 및 frame_id 메타데이터 포함
+- global_person_id, camera_id, frame_id, track_id, scene_name, bbox 메타데이터 포함
 
 ### **FR-18. Occlusion / Visibility (Phase 2+)**
 시스템은 각 bbox에 대해:
@@ -197,6 +195,11 @@ Session 종료 시 자동 Validation에 포함할 항목:
 - bbox 범위 유효성  
 - 라벨-이미지 매칭 여부  
 - 누락 프레임 여부  
+- 이동형 카메라 pose 기록 검증:
+  - 모든 frame_id에 pose 샘플 존재 여부
+  - timestamp 증가(단조) 확인
+  - 경로 편차 허용 오차 (waypoint 대비 ±0.15m, 회전 ±3°)
+  - 샘플 누락 시 manifest.validationSummary에 `poseMissingCount` 표기
 
 ### **FR-24. Statistics 생성**
 Session 종료 시 기본 Statistics를 생성해야 한다:
@@ -205,6 +208,10 @@ Session 종료 시 기본 Statistics를 생성해야 한다:
 - 인원 수  
 - occlusion histogram  
 - bbox scale histogram  
+- 이동형 카메라 경로 요약:
+  - 총 이동 거리, 평균/최대 속도, pose 샘플 수
+  - pose 파일 checksum
+  - pose drift 경고 여부(예: 허용 오차 초과 시 true)
 
 ### **FR-25. manifest.json 생성**
 Session 종료 시 다음 내용을 포함한 manifest.json을 생성해야 한다:
@@ -233,6 +240,34 @@ Edge 디바이스 용도를 위해 다음을 지원해야 한다:
 - TFLite-compatible 포맷  
 - ONNX 기반 경량 Export  
 - Custom binary 라벨 구조  
+
+---
+
+## 4.9 품질/오류/전환/Export 정책
+
+### **FR-29. 품질 모드 & 드롭 정책**
+- 시스템은 `strict`/`relaxed` 두 가지 품질 모드를 지원해야 한다.
+- strict: frame/label drop 0, join timeout 발생 시 세션 실패.
+- relaxed: frame/label drop 허용, dropped 수를 metrics·manifest에 기록.
+- FrameBus drop, LabelAssembler timeout/drop 등 모든 드롭 이벤트는 `dropped_*` 지표로 보고해야 한다.
+
+### **FR-30. Stage Failure / Retry / Recovery**
+- 각 Stage는 실패 시 정책 기반으로 `retry → skip → session abort`를 선택할 수 있어야 한다.
+- Stage별 실패/재시도/skip 횟수를 metrics 및 manifest에 기록해야 한다.
+
+### **FR-31. Scene 전환 시 Global Person ID 유지**
+- 하나의 Session에서 여러 Scene을 전환할 수 있어야 한다.
+- Scene 전환 시 Global Person ID, ReID appearance, Agent state를 새 Scene으로 마이그레이션해야 한다.
+
+### **FR-32. ReID / Edge Export 확장**
+- ReID: person별 샘플링 규칙(interval/max_samples) 지원, 필수 메타데이터(카메라/track/global_id/scene/time) 포함, `manifest.reidArtifacts[].status`에 성공/실패 기록.
+- Edge Export: onnx/tflite/custom 포맷 지원, 각 아티팩트의 status와 checksum을 manifest에 기록.
+
+### **FR-33. Validation/Manifest 확장**
+- manifest/validation에 다음 지표를 포함해야 한다:
+  - dropped_frames / dropped_by_join_timeout / missing_labels / corrupted_files
+  - stage_failure_counts / retries / skips
+  - ReID/Edge artifact status 및 checksum
 
 ---
 
@@ -272,16 +307,14 @@ Edge 디바이스 용도를 위해 다음을 지원해야 한다:
 시스템은 **12시간 이상** 연속 실행 시 중단 없이 작동해야 한다.
 
 ### **NFR-05. Checkpoint/Restart**
-Session 도중 오류 발생 시
-마지막 checkpoint 지점부터 재시작 가능해야 한다.(Phase 2+)
+Session 도중 오류 발생 시 마지막 checkpoint 지점부터 재시작 가능해야 한다.(Phase 2+)
 
 ---
 
 ## 5.3 Maintainability
 
 ### **NFR-06. 모듈화**
-Scene/Camera/Crowd/Label/Pipeline은 모듈화되어  
-독립적으로 유지보수/확장 가능해야 한다.
+Scene/Camera/Crowd/Label/Pipeline은 모듈화되어  독립적으로 유지보수/확장 가능해야 한다.
 
 ### **NFR-07. Config 기반 실행**
 코드 변경 없이 Config만으로 시나리오를 변경할 수 있어야 한다.
@@ -314,3 +347,28 @@ Scene/Camera/Crowd/Label/Pipeline은 모듈화되어
 - 로컬 전용 실행 시 localhost만 바인딩 (0.0.0.0 금지)
 - 분산 실행 시 mTLS 또는 API Key 필수
 - 기본 포트 8080 (변경 가능)
+
+### **NFR-13. 시간 모델 (Simulation Time)**
+- `FrameContext.timestamp`는 시뮬레이션 월드 시간(Scenario/TimeWeather 기준)을 사용한다.
+- 동일 config에서는 timestamp 시퀀스가 재현 가능해야 하며, 실시간 FPS 지연과 무관하게 frame_id 순서를 신뢰한다.
+
+### **NFR-14. 모니터링/상태 엔드포인트**
+- `/status` 등 상태 엔드포인트는 인증 필수이며, 내부 큐/경로/사용자 정보를 노출하지 않고 요약 스칼라만 제공한다.
+- Liveness/Readiness/Prometheus pull 용도로 사용하며, UI는 대시보드(Grafana 등)를 통해 본다.
+
+### **NFR-15. 라벨 정확도 (Accuracy)**
+- 시스템이 생성하는 모든 라벨(bbox, track_id, global_person_id, occlusion, visibility)은 GT 기반으로 100% 정확해야 한다.
+
+---
+
+# 6. 제약 (Constraints)
+
+### **C-01. Unity Main Thread 제약**
+- Unity Rendering API(Camera.Render, ReadPixels 등)는 Main Thread에서만 호출한다.
+
+### **C-02. Capture/Worker API 사용 제약**
+- Capture/Worker 단계는 Unity가 준비한 GPU/CPU 버퍼만 소비하며, Worker가 Unity API를 직접 호출해서는 안 된다.
+- Phase 1: 동기 캡처, Phase 2+: AsyncGPUReadback 기반 캡처를 지원한다.
+
+### **C-03. Zero-Copy 오염 방지**
+- Zero-Copy 파이프라인 옵션 사용 시 Stage 간 공유 상태 오염을 방지하고, Stage 상태/에러를 기록할 수 있어야 한다.
