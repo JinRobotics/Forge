@@ -1,13 +1,3 @@
-Forge
-
----
-
-> **문서 버전:** v2.1 (2025-11-15)
-> **변경 이력:**
-> - v2.1 (2025-11-15): Memory Ownership & Lifetime 섹션 추가 (§2.0)
-> - v2.0 (2025-02-15): FrameBus Thread-safety 구체화, Zero-Copy Pipeline 옵션 추가
-> - v1.1 (2025-02-14): ReID Dataset Export Stage 반영, 버전 섹션 추가
-> - v1.0 (2024-12-01): 초기 작성
 
 ## 1. 목적 (Purpose)
 
@@ -639,6 +629,26 @@ Queue:
 성능 목표:
 - 1080p 기준 카메라 N개 합산 FPS가 전체 목표 FPS(예: 5~15 FPS)에 걸리지 않도록 모델/설정 선택.
 
+#### 4.3-A Inference Engine Integration (GPU/CPU 경계)
+
+- DetectionWorker는 `IInferenceRunner` 추상화를 통해 ONNX Runtime, TensorRT, TorchScript 등 다양한 엔진을 플러그인 방식으로 사용한다.
+- 기본 배치 전략:
+  1. CaptureWorker가 ArrayPool 버퍼를 채운 RawImageData를 DetectionWorker 큐에 push
+  2. DetectionWorker는 `IImagePreprocessor`가 GPU 텍스처/CPU 메모리 전환을 담당하도록 위임
+  3. `IInferenceRunner.RunAsync(Span<byte> batchTensor, InferenceContext ctx)` 호출 시 GPU 스트림 ID와 batch 크기를 명시
+  4. GPU 결과는 `DetectionParser`가 즉시 CPU 구조체로 변환하여 다음 Stage에 전달
+- GPU/CPU 간 메모리 전환 규칙:
+  - AsyncGPUReadback 사용 시 GPU→CPU 복사는 Capture 단계에서 완료하고 DetectionWorker는 CPU 메모리만 읽는다.
+  - TensorRT/Torch RT 등의 GPU Inference를 사용할 경우 RawImageData를 GPU 텍스처로 재업로드하지 않도록, Capture 단계에서 GPU native handle을 함께 제공하는 옵션(`RawImageData.GpuHandle`)을 두고 DetectionWorker가 선택적으로 활용한다.
+- Thread/Stream 설계:
+  - `DetectionWorker`는 CPU 측 Stage지만, 내부에서 GPU 스트림을 사용해 비동기 실행.
+  - `detection.inference.concurrentStreams` 설정으로 GPU 스트림 수를 제어하여 AsyncGPUReadback, TrackingWorker와 경합을 피한다.
+- 장애/핫스왑:
+  - `IInferenceRunnerHealthCheck`가 주기적으로 성능/오류율을 MetricsEmitter에 기록하고, 임계치 초과 시 fallback 엔진(예: CPU)으로 스위칭한다.
+  - 스위칭 이벤트는 DiagnosticsService에 `type="inference_failover"`로 기록하고 Manifest `quality.inferenceFallbackCount`에 누적한다.
+- 문서 연계:
+  - GPU/Inference 구성 파라미터는 `SessionConfig.detection.inference` 섹션에 정의하고 ConfigSchemaRegistry에서 검증한다.
+
 ---
 
 ### 4.4 Tracking Stage – TrackingWorker
@@ -1240,12 +1250,55 @@ ProgressReporter로 전달되는 정보:
 - 예상 완료 시간
 - 누적 에러/경고 수
 
+### 7.1 Stage Failure Propagation Matrix
+
+| Stage | Failure / Drop 조건 | Downstream 영향 | Manifest / Metrics 업데이트 |
+|-------|--------------------|-----------------|-----------------------------|
+| FrameBus | Queue overflow, Publish 실패 | Frame drop, GenerationController가 BackPressureLevel 상승 → IFrameRatePolicy가 Skip/Pause | `metrics.frame.dropped_total++`, `manifest.quality.frameDropCount`, Diagnostics `event=framebus_drop` |
+| Capture | 특정 camera capture 실패 (N회) | 해당 camera RawImage 누락, DetectionWorker는 빈 입력으로 처리 | `StageStatuses["Capture"]=Partial`, `manifest.quality.cameras[].missingFrames`, `metrics.capture.partial_total` |
+| Capture | 모든 camera 실패 | frame skip, Join 단계까지 전달 안 됨 | Diagnostics severity=Error, `manifest.quality.frameDropByCapture++` |
+| Detection | Inference 오류/timeout | DetectionData 빈 리스트 → TrackingWorker가 이전 상태 유지 | `StageStatuses["Detection"]=Failed`, `manifest.quality.stageFailures.detection++`, `metrics.detection.failures_total` |
+| Tracking | TrackingState 없음/유효성 실패 | LabelAssembler가 frame drop (strict) 또는 partial 라벨 (relaxed) | `manifest.quality.droppedByJoinTimeout` (LabelAssembler 기록), `StageStatuses["Tracking"]=Failed` |
+| Occlusion | Visibility 데이터 누락 | LabeledFrame에 occlusion 필드 미포함, 나머지 pipeline은 계속 | `manifest.quality.stageWarnings.occlusion++` |
+| LabelAssembler | Join timeout | strict: 세션 PAUSE, relaxed: frame drop | `metrics.label.dropped_by_join_timeout_total`, Diagnostics event, Manifest quality section에 누락 사유 기록 |
+| Encode | 이미지/라벨 인코딩 실패 | 선택적 skip(포맷 단위) 또는 frame drop | `manifest.outputs[].status`, `metrics.encode.failures_total` |
+| Storage | 디스크 오류/용량 없음 | 세션 즉시 중단 | `DiagnosticsService` critical event, Manifest `status="failed"` |
+| ReID Export | Crop 실패 | Dataset 일부 누락 | `manifest.reidArtifacts[].status`, `metrics.reid.failures_total` |
+| Edge Export | 아티팩트 제작 실패 | 해당 포맷만 failed | `edgeArtifacts[].status`, Diagnostics warning |
+| Sensor Export | 파일 실패 | robotics. sensors[].status=failed | `metrics.sensor_export.failures_total`, Manifest robotics section |
+
+### 7.2 StageStatus / Validation 연동 규칙
+
+- Zero-Copy 모드에서는 `FramePipelineContext.StageStatuses`를 LabelAssembler가 집계하여 `StageStatusSummary`(성공/실패/부분 성공 카운터)를 생성하고 Manifest `quality.stageStatusSummary`에 저장한다.
+- ValidationService는 StageStatuses를 입력 받아 다음을 수행한다:
+  - `CriticalStages = {Capture, Detection, Tracking, Storage}` 중 하나라도 Failed가 있으면 ValidationReport에 `FatalIssues`로 기록.
+  - Partial 상태(Occlusion, ReID 등)는 `Warnings`에 누적.
+- DiagnosticsService는 StageStatus 변화 이벤트(예: Failed→Recovered)를 감시하여 `/status` health를 조정한다. critical Stage가 연속 실패하면 HTTP 503으로 전환한다.
+- ProgressReporter는 StageStatuses/StageErrorFlags로부터 요약 문자열(예: `Tracking delayed (3 frames)`)을 생성해 CLI에 표시한다.
+
 ---
 
 ## 8. 성능/안정성 목표 요약
 
-- 파이프라인은 **Frame 단위 비동기 처리**를 통해 CPU/GPU/I/O 부하를 분산시킨다.
-- LabelWorker를 Detection/Tracking/ReID/Occlusion/Assembler로 분할함으로써 병목을 줄인다.
-- Queue + Back-pressure 정책으로 메모리 폭주를 방지한다.
-- Validation/Stats/Manifest를 통해 Dataset 품질을 보장한다.
-- Config 기반으로 각 Stage의 동시성/큐 크기/Export 설정을 튜닝 가능하도록 한다.
+- 파이프라인은 **Frame 단위 비동기 처리**로 CPU/GPU/I/O 부하를 분산하고 Queue+Back-pressure로 메모리 폭주를 방지한다.
+- Stage별 SLA를 명시적으로 관리하고 MetricsEmitter/DiagnosticsService와 연동해 목표를 정의한다.
+- Validation/Stats/Manifest는 StageStatuses·품질 카운터를 기반으로 Dataset 품질을 보장한다.
+- Config 기반으로 동시성/큐 크기/Export 설정을 튜닝하며, SLA를 만족하지 못할 경우 정책 전환(FrameRatePolicy, Zero-Copy 등)을 고려한다.
+
+### 8.1 Stage별 SLA 테이블 (초기 목표)
+
+| Stage | 목표 지표 | 초깃값 (1080p, 4 camera) | 측정 방법 | SLA 미달 시 대응 |
+|-------|-----------|-------------------------|-----------|------------------|
+| FrameBus | Publish/Consume latency | < 1ms | `metrics.framebus.latency_ms` 95p | Queue capacity 조정, lock contention 분석 |
+| Capture | GPU→CPU Readback 시간 | < 12ms/frame | `metrics.capture.readback_ms` | AsyncGPUReadback 병렬 수 조절, 해상도 하향 |
+| Detection | Inference latency per batch | < 25ms (YOLOv8n, batch=4) | `metrics.detection.inference_ms` 95p | 다른 모델/엔진 선택, batch 크기 조정 |
+| Tracking | per frame 처리 | < 3ms | `metrics.tracking.process_ms` | 알고리즘 단순화, thread 수 확대 |
+| LabelAssembler | Join latency | < 5s timeout, 평균 < 200ms | `metrics.label.join_wait_ms` | `_joinTimeout` 조정, pending frame limit 확대 |
+| Encode | 이미지+라벨 인코딩 | < 10ms/frame | `metrics.encode.process_ms` | 압축률 조정, SIMD/Native encoder 사용 |
+| Storage | 파일 쓰기 | < 15ms/file | `metrics.storage.io_ms` | async I/O, disk throughput 점검 |
+| ReID Export | crop 생성 | < 5ms/crop | `metrics.reid.process_ms` | 샘플링 비율 조정 |
+| Edge Export | 포맷 생성 | < 500ms/batch | `metrics.edge_export.process_ms` | 배치 사이즈 조정, 별도 세션으로 분리 |
+
+- SLA는 Phase 1 벤치마크 값을 기준으로 하며, Performance Benchmark 문서에 실제 측정치를 누적한다.
+- MetricsEmitter는 Stage별 latency histogram을 Prometheus로 내보내고, SLA를 초과하는 경우 DiagnosticsService가 `event=stage_sla_violation`을 기록한다.
+- Config에 `performance.targets` 섹션을 추가해 Stage별 목표를 재정의할 수 있고, Test Strategy 문서의 성능 회귀 테스트가 해당 값을 검증한다.

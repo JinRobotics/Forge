@@ -1,10 +1,3 @@
-# Database Schema Specification
-
-> **문서 버전:** v1.0 (2025-11-15)
-> **변경 이력:**
-> - v1.0 (2025-11-15): 초기 작성
-
----
 
 ## 1. 목적 (Purpose)
 
@@ -306,6 +299,23 @@ CREATE TABLE IF NOT EXISTS statistics (
 
 -- 인덱스
 CREATE INDEX idx_statistics_session ON statistics(session_id);
+
+#### 4.3-A 통계 저장 포맷 / JSONB 가이드
+
+- SQLite 단계에서는 히스토그램/분포 데이터를 `TEXT`(JSON) 컬럼으로 저장한다. PostgreSQL 마이그레이션 시에는 `JSONB`로 전환하고, 다음 인덱스를 생성한다:
+  ```sql
+  -- PostgreSQL 전용
+  CREATE INDEX idx_statistics_occlusion_path
+      ON statistics
+      USING GIN ((occlusion_histogram_json) jsonb_path_ops);
+  ```
+- `behavior_distribution_json` 등 반복 구조는 `stats_distribution(session_id, key, value)` 형태의 정규화된 테이블로 분해할 수도 있으나, 초기 구현에서는 JSON 단일 컬럼을 사용하고 ETL 파이프라인에서 파싱/집계를 담당한다.
+- Validation/Manifest 서비스는 `StatisticsRepository`가 제공하는 DTO를 통해 JSON 필드를 읽을 뿐 DB 스키마에 직접 의존하지 않도록 하여, 향후 JSONB→정규 테이블 변경 시 영향 범위를 최소화한다.
+- 1회 당 최소 단위:
+  - `occlusion_histogram_json`: bucket 최대 10개
+  - `bbox_size_histogram_json`: `{"tiny","small","medium","large"}` 4개 키
+  - `behavior_distribution_json`: Config에서 정의한 Behavior ID 수(보통 <10)
+- 대용량 세션에서 통계 크기가 커지는 것을 방지하기 위해 `stats_max_bucket_count`(Config) 기본값을 16으로 제한하고, Validation 단계에서 초과 bucket이 존재하면 병합한다.
 ```
 
 ---
@@ -433,6 +443,11 @@ CREATE TABLE IF NOT EXISTS worker_heartbeat (
 
 CREATE INDEX idx_worker_heartbeat_worker ON worker_heartbeat(worker_id);
 CREATE INDEX idx_worker_heartbeat_time ON worker_heartbeat(reported_at DESC);
+
+보존 정책:
+- Heartbeat는 시계열 데이터이므로 기본적으로 7일만 유지한다. SQLite에서는 주기적 배치 작업으로 `DELETE FROM worker_heartbeat WHERE reported_at < datetime('now', '-7 days')`를 수행한다.
+- PostgreSQL 전환 시 `PARTITION BY RANGE (reported_at)` 또는 `timescaledb` 같은 확장을 통해 자동 파티셔닝/TTL을 적용할 수 있다.
+- 대시보드/알람 서비스는 최신 24시간 데이터를 주로 사용하므로 Repository 레이어에서 `reported_at >= datetime('now', '-1 day')` 조건을 기본으로 붙인다.
 ```
 
 ---
@@ -876,6 +891,9 @@ cp sessions_backup.db sessions.db
 - ✅ `session(created_at)`: 최근 Session 조회
 - ✅ `checkpoint(session_id, frame_number)`: Composite index
 - ✅ `statistics(session_id)`: 1:1 관계
+- ✅ `sensor_artifact(session_id, sensor_type)` / `sensor_artifact(frame_id)`: Robotics/SLAM 조회용
+- 권장: PostgreSQL 도입 시 `sensor_artifact(session_id, frame_id)` 복합 인덱스를 추가해 특정 프레임 범위 조회를 최적화하고, `job_queue(status, scheduled_at)`에 파티션 또는 partial index를 적용해 대량 작업 큐에서도 성능을 보장한다.
+- `camera_pose_meta(session_id, camera_id)`에 대한 복합 인덱스를 두어 Resume/Diagnostics 시 빠른 lookup을 보장한다.
 
 ### 9.2 쿼리 최적화
 

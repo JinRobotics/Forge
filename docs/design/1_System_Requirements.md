@@ -4,7 +4,7 @@
 본 문서는 Forge의 **기능적 요구사항(FR)** 과  
 **비기능적 요구사항(NFR)** 을 개발자 관점에서 정의한다.
 
-- **UR(사용자 요구)** 에서 정의된 WHAT을 기술적으로 실현하기 위한 REQUIREMENTS  
+- 상위 사용자 요구에서 정의된 WHAT을 기술적으로 실현하기 위한 REQUIREMENTS  
 - “HOW”는 Architecture/LDD/Pipeline Spec 문서에서 정의한다  
 - 모든 요구사항은 **테스트 가능**해야 한다
 
@@ -36,7 +36,7 @@
 
 # 4. Functional Requirements (FR)
 
-SR에서는 다음 8개의 영역으로 구분한다.
+본 문서에서는 다음 8개의 영역으로 구분한다.
 
 1) Scene System  
 2) Camera System  

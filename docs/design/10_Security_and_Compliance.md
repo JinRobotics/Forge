@@ -1,8 +1,3 @@
-# Security and Compliance Guide
-
-> **문서 버전:** v1.0 (2025-02-14)  
-> **변경 이력:**  
-> - v1.0 (2025-02-14): 초기 작성
 
 ## 1. 목적
 
@@ -154,9 +149,42 @@ manifest.GeneratedBy = $"User_{hashedId.Substring(0, 8)}";
 
 ---
 
-## 4. 라이선스 및 저작권
+## 4. 접근 제어 및 암호화
 
-### 4.1 생성 데이터 라이선스
+### 4.1 RBAC (Role-Based Access Control)
+
+- **Role 계층**:
+  - `viewer`: 세션/manifest 조회만 가능. `/status`(읽기), `/sessions/{id}` GET 허용.
+  - `operator`: 세션 생성/중지 권한. `/session/init`, `/session/start`, `/session/stop` 허용.
+  - `admin`: operator 권한 + Config 스키마 업데이트, Worker 등록, Audit 로그 열람.
+- API Key/Bearer 토큰은 Role을 포함한 클레임을 갖도록 하고, HttpAuthMiddleware에서 Role 검사를 수행한다. (예: `X-Api-Key` → RBAC 매핑 테이블, `Authorization: Bearer` → JWT `role` 클레임)
+- `/workers/*`, `/config/schema/*`, `/audit/*`는 반드시 `admin` Role로 제한한다.
+- CLI/SDK는 `~/.forge/credentials.json`에서 Role과 스코프를 명시하고, 잘못된 Role로 호출 시 403을 반환한다.
+
+### 4.2 암호화 저장 정책
+
+- **정지 데이터(At-rest)**:
+  - `session.db`(SQLite/PostgreSQL), `config_snapshots`, `audit_logs`는 OS 수준 암호화(disk encryption) 외에 필요 시 AES-256-GCM으로 추가 암호화한다.
+  - Repository 레이어는 `ISecretStore`(Vault, KMS 등)를 통해 마스터 키를 로드하고, `config_json_encrypted` 컬럼을 선택적으로 사용한다.
+  - 백업 파일(`sessions_backup.db`)은 `forge backup --encrypt --key <KMS-ARN>` 옵션으로 암호화 후 저장한다.
+- **전송 데이터(In-transit)**:
+  - `simulationGateway.mode=remote/distributed` 시 기본적으로 TLS(mTLS 권장)를 사용한다.
+  - CLI ↔ Orchestration 통신에서도 HTTPS/gRPC-TLS만 허용하며, self-signed 인증서 사용 시 trust store에 사전 등록한다.
+
+### 4.3 정책 적용 검증 (CI Integration)
+
+- Test Strategy에 `SecurityChecks` job을 추가하여 다음을 검증한다:
+  - ConfigSanitizer가 API Key/토큰/사용자 경로를 마스킹했는지 (`tests/unit/Application/ConfigurationLoaderTests`에 `ConfigSanitizer_SensitiveFieldsMasked` 추가).
+  - `/status` 계약 테스트가 Role 기반 접근을 강제하는지 (`tests/integration/StatusEndpointTests`에서 viewer Role로 POST 차단을 검증).
+  - RBAC 정책이 누락되지 않았는지 (`dotnet test tests/security`에서 허용되지 않은 조합 호출 시 403 기대).
+  - 암호화 플래그가 활성화된 세션에서 `config_json`가 평문으로 저장되지 않는지 (`tests/integration/EncryptedConfigTests`).
+- GitHub Actions `pr.yml`에 `security-policy` job을 추가하고, 실패 시 `Security policy violation` 코멘트로 merge를 차단한다.
+
+---
+
+## 5. 라이선스 및 저작권
+
+### 5.1 생성 데이터 라이선스
 
 **권장 라이선스**: Apache 2.0 또는 CC BY 4.0
 

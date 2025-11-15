@@ -1,6 +1,3 @@
-Forge
-
----
 
 ## 1. 문서 목적 (Purpose)
 
@@ -164,10 +161,51 @@ Config에서 `simulation.gateway.mode=remote` 혹은 `distributed`를 설정하�
   - 상태 응답이 내부 상세(큐별 길이, 경로) 대신 요약 지표만 반환하는지 계약 테스트로 고정한다.
   - 이동형 카메라가 존재할 경우 pose 요약(최대 위치/회전 변화량 등)만 제공하고, 세부 궤적은 인증된 manifest/로그에서 확인하도록 한다.
 
+##### `/status` 응답 스키마
+
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| `status` | string | ✅ | `idle`, `ready`, `running`, `paused`, `error` 중 하나 |
+| `engineVersion` | string | ✅ | 현재 엔진 버전. `X-Engine-Version` 헤더와 동일 값 |
+| `supportedVersions[]` | string[] | ✅ | API 버전 목록 (예: `["v1","v1beta"]`) |
+| `authMode` | string | ✅ | `none`, `api-key`, `mtls` |
+| `currentFrame` | integer | running 시 필수 | 현재 생성 완료 프레임 ID |
+| `targetFrame` | integer | running 시 필수 | 목표 프레임 수 (`SessionConfig.totalFrames`) |
+| `fps` | number | running 시 필수 | 최근 5초 평균 FPS |
+| `activeScene` | string | running 시 필수 | 현재 활성 Scene |
+| `queueDepthSummary` | number | ✅ | 0~1, PipelineCoordinator가 집계한 최대 큐 사용률 |
+| `frameRatePolicy` | object | 선택 | `{ "id": "quality_first", "lastDecision": "Generate" }` |
+| `stageStatusSummary` | object | 선택 | Stage별 성공/실패 카운터 (Zero-Copy/Diagnostics 연동) |
+| `metricsSummary` | object | 선택 | Prometheus 노출 전 요약 (예: droppedFrameCount, encodeLatencyP95) |
+| `mobileCameras[]` | object[] | mobile 존재 시 | `id`, `poseTimestamp`, `position`, `rotationEuler` |
+| `warnings[]` | string[] | 선택 | 사용자에게 알려야 할 경고 메시지 |
+
+응답 스키마는 `docs/config/schema/status.schema.json`으로 정의하며, Test Strategy 문서의 `/status` 계약 테스트가 이를 검증한다.
+
 CLI/SDK 구성 시:
 - `dotnet run -- --api-key <KEY>` 형식으로 API Key를 전달하거나,
 - 환경 변수 `FORGE_API_KEY` / `FORGE_BEARER`를 설정하면 자동으로 `X-Api-Key` 또는 `Authorization` 헤더에 주입되도록 한다.
 구체적인 설정 방법은 CLI 도움말(`--help`)과 동일하게 유지한다.
+
+### 3.4 Distributed 모드 확장 API (Master ↔ Worker)
+
+`simulationGateway.mode=distributed`일 때 Master 노드는 HTTP/gRPC 하이브리드 API를 노출한다. gRPC 계약은 `DistributedGeneration` 서비스(Architecture §8.5)와 동일하며, REST 대체 경로도 함께 제공한다.
+
+| gRPC Method | REST 대체 | 설명 | 주요 필드 |
+|-------------|-----------|------|----------|
+| `AssignTask(ScenarioTask)` | `POST /workers/{workerId}/tasks/assign` | Master → Worker 작업 전달 | `sessionId`, `scenario`, `frameRange`, `qualityMode` |
+| `RequestIDRange(WorkerInfo)` | `POST /workers/{workerId}/id-range` | Worker가 GlobalPersonId 범위 요청 | `workerId`, `requestedCount` |
+| `ReportProgress(ProgressUpdate)` | `POST /workers/{workerId}/progress` | Worker → Master 진행률/큐 비율 보고 | `processedFrames`, `queueRatio`, `gpuUtilization` |
+| `ReportResult(WorkerResult)` | `POST /workers/{workerId}/results` | Worker → Master 결과/manifest 경로 제출 | `frameCount`, `outputDirectory`, `personIds[]` |
+| `Heartbeat(stream)` | `POST /workers/{workerId}/heartbeat` | Keep-alive + health 데이터 | `status`, `lastFrame`, `metricsSummary` |
+
+REST 경로는 JSON/HTTPS를 사용하며, 분산 환경에서도 동일한 인증 정책(mTLS/API Key + allowedHosts)을 적용한다. 응답 스키마는 gRPC DTO를 JSON으로 직렬화한 형태와 동일하다.
+
+추가 규칙:
+- Worker는 `RegisterWorker`(REST:`POST /workers/register`)를 먼저 호출하여 `workerToken`을 발급받고, 이후 모든 요청에 `X-Worker-Token` 헤더를 포함한다.
+- Heartbeat 지연이 `>120s`이면 Master는 해당 Worker를 offline으로 표시하고 `AssignTask`를 다시 큐잉한다.
+- Task 결과를 업로드한 후에는 `ReportResult`에서 manifest checksum과 Metrics snapshot을 함께 제출하여 Master가 글로벌 Manifest/Stats를 병합한다.
+- Master → Worker 브로드캐스트(예: `PauseAll`, `ResumeAll`)는 `POST /workers/broadcast`로 구현하며, 세션 상태 변화 시 DiagnosticsService가 이벤트를 기록한다.
 
 ---
 
@@ -367,6 +405,19 @@ Config 예시:
 | `occlusion` | float | 0~1, occluded 비율 (Phase 2+) |
 | `visibility` | float | 0~1, 노출 비율 (Phase 2+) |
 | `attributes` | object | (선택) appearance tags, 행동 태그 등 |
+
+**선택 채널 / 확장 필드**
+
+| 필드 | 타입 | 활성화 조건 | 설명 |
+|------|------|------------|------|
+| `maskRle` | object | `output.labelChannels`에 `"instance_mask"` 포함 | COCO RLE(`counts`, `size`) |
+| `depth` | float[][] | `"depth_map"` | 카메라 좌표계 depth(m). 압축 버전(`.npz`) 병행 |
+| `keypoints[]` | array | `"keypoints_2d"` | `[x, y, visibility]` 배열 17~32포인트 |
+| `reidEmbedding[]` | float[] | `reid.export.enabled=true` | Appearance vector |
+| `sensorPose` | object | mobile 카메라 | `{ "position": [...], "rotationQuat": [...] }` |
+| `labelSchemaVersion` | string | 항상 | `manifest.labelSchemaVersion`과 동일, 소비자가 스키마 진화를 추적할 수 있도록 한다. |
+
+Config의 `output.labelChannels[]` 배열을 통해 어떤 선택 채널이 활성화되는지 정의하며, ValidationService가 `labelSchemaVersion`/필수 필드 일관성을 검사한다.
 
 ### 5.2 예시 (`/labels/json/cam01/000000.json`)
 

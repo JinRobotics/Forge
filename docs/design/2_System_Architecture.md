@@ -1,18 +1,9 @@
-Forge
-
----
-
-> **문서 버전:** v2.0 (2025-02-15)
-> **변경 이력:**
-> - v2.0 (2025-02-15): Unity 의존성 격리(ISimulationGateway), 분산 아키텍처 설계 추가, Back-pressure 알고리즘 구체화
-> - v1.1 (2025-02-14): `/status` 버전/인증 노출 및 PipelineCoordinator 모니터링 지침 추가
-> - v1.0 (2024-12-01): 초기 작성
 
 ## 1. 목적 (Purpose)
 
 본 문서는 Forge의 **전체 시스템 아키텍처**를 정의한다.
 
-- URS v2, SRS v2에서 정의한 요구사항을 만족하는 구조를 제시한다.
+- 상위 요구사항 세트에서 정의한 기능·비기능 목표를 만족하는 구조를 제시한다.
 - 계층(Layer), 주요 컴포넌트, 실행 흐름, 스레드 모델, 데이터 흐름, 오류 처리, 확장 전략을 기술한다.
 - 구현 시 “무엇을 어디에 넣을지”에 대한 기준점이 된다. (단, 상세 메서드/클래스는 Class Design v2에서 정의)
 
@@ -292,7 +283,18 @@ public enum FrameGenerationDecision {
 }
 ```
 - GenerationController는 정책 객체 결과만 반영하여 if/else 증가를 피한다.
-- Config에서 정책을 선택할 수 있도록 확장 (예: `frameRatePolicy: "quality-first"`).
+- 정책 로더(`FrameRatePolicyFactory`)는 Config에 정의된 `frameRatePolicy.id`를 기반으로 적절한 구현체를 주입하며, 파라미터와 threshold는 `frameRatePolicy.options` 섹션을 통해 전달한다.
+- Config에서 정책을 선택할 수 있도록 확장 (예: `frameRatePolicy.id: "quality_first"`). 정책 정의는 `config/schema/frame_rate_policy.schema.json`에 단일 소스로 관리하고, Application Layer의 `ConfigurationLoader`와 Orchestration Layer의 `SessionManager`가 동일 스키마를 참조한다.
+
+**정책 프리셋**
+
+| 정책 ID | BackPressureLevel → FrameGenerationDecision | 설명 | 대표 시나리오 |
+|---------|--------------------------------------------|------|----------------|
+| `quality_first` | OK→Generate / CAUTION→Generate / SLOW→Skip(1 of N, N=3) / PAUSE→Pause | 라벨 품질을 우선하여 skip 빈도를 최소화하고, Pause 상태에서도 최대 30초마다 health ping을 발생시켜 Deadlock 탐지 | 연구/검증 세션, Robotics 동기화 |
+| `throughput_first` | OK→Generate / CAUTION→Skip(1 of N, N=2) / SLOW→Skip(1 of N, N=1) / PAUSE→Force resume(최대 30s 후) | 프레임 수를 극대화하기 위해 BackPressureLevel에 바로 frame drop을 적용 | Edge 대량 생성, Synthetic pre-train |
+| `balanced` | OK→Generate / CAUTION→Skip(1 of N, N=4) / SLOW→Pause(최대 10s) / PAUSE→Pause | 기본 정책. pipe drain 여부와 CPU/GPU utilization을 MetricsEmitter에서 확인해 auto-switch 조건을 충족하면 품질/처리량 간 동적 전환 | 일반 배포, QA 세션 |
+
+- 운영자는 Config에서 `frameRatePolicy.profileOverrides`를 통해 특정 BackPressureLevel에 대한 커스텀 매핑을 선언할 수 있고, PipelineCoordinator는 `/status`의 `frameRatePolicySummary` 필드로 활성 정책과 최근 전환 결과를 노출한다. Metrics/Tracing은 §3.5 Cross-cutting Services 섹션의 `MetricsEmitter`에 위임한다.
 
 #### 3.2.5 PipelineCoordinator
 
@@ -485,7 +487,7 @@ public record CameraPose(
 #### 3.3.3 CrowdService
 
 - 인물(Pawn/Agent) 생성/제거
-- 인원 수 범위 유지 (UR/SR 기준)
+- 인원 수 범위를 상위 요구사항에서 정의한 값으로 유지
 - 각 인물의 상태(위치/속도/외형/행동) 관리
 - **Global Person ID 할당**: Agent 생성 시점에 Session 전역에서 고유한 ID 부여
 - **Scene 전환 시 PersonState 마이그레이션** (Phase 2+): Global ID 및 Appearance 보존
@@ -621,6 +623,27 @@ public class MultiSimSyncCoordinator
 ```
 
 `IRoboticsGateway`는 Isaac RPC/REST/gRPC를 캡슐화하며 Pose/LiDAR/IMU/Odom/Depth 데이터를 Frame-aligned 형태로 제공한다. 자세한 설계는 `docs/design/12_Robotics_Extension.md` 참고.
+
+**Phase 4 시퀀스 다이어그램**
+
+```mermaid
+sequenceDiagram
+    participant GC as GenerationController
+    participant MSC as MultiSimSyncCoordinator
+    participant Unity as ISimulationGateway (Unity)
+    participant Isaac as IRoboticsGateway (Isaac)
+    participant FB as FrameBus / Pipeline
+
+    GC->>MSC: Step(frameId, deltaTime)
+    MSC->>Unity: GenerateFrameAsync(frameId)
+    MSC->>Isaac: StepAsync(frameId, deltaTime)
+    Unity-->>MSC: FrameGenerationResult
+    Isaac-->>MSC: RoboticsStepResult
+    MSC->>GC: FrameContext(merged)
+    GC->>FB: Publish(FrameContext, cameras, robotPoses)
+```
+
+다이어그램처럼 MultiSimSyncCoordinator는 기존 GenerationController-FrameBus 루프 사이에 삽입된다. Back-pressure 신호는 여전히 PipelineCoordinator → GenerationController 경로를 따르지만, Robotics latency가 timeout 임계치를 넘으면 DiagnosticsService(§3.5)가 이벤트를 기록하고 FrameRatePolicy가 `quality_first` 프로파일일 경우에는 Pause 대신 Skip으로 완화하도록 정책을 전환한다.
 
 ---
 
@@ -767,6 +790,21 @@ public class MultiSimSyncCoordinator
   - frame 수, detection 수, occlusion histogram, bbox histogram 등 통계 계산
 - `ManifestService`
   - `manifest.json` 생성 (SessionConfig, Stats, Validation 결과 포함)
+
+### 3.5 Cross-cutting Services (Config / Metrics / Diagnostics)
+
+레이어별 책임을 유지하면서 **Config 일관성·관측성·운영 진단**을 공통 모듈로 통합한다.
+
+| 컴포넌트 | 역할 | 주요 연동 지점 | 산출물/인터페이스 |
+|----------|------|----------------|------------------|
+| `ConfigSchemaRegistry` | Config 스키마 단일 소스(Schema.json) 관리, 버전 태깅, 마이그레이션 규칙 제공 | Application Layer의 `ConfigurationLoader`, Orchestration Layer의 `SessionManager`, Simulation/Data Pipeline 단계별 Config 파서 | `schemaVersion`, `breakingChanges[]`, `defaults` |
+| `MetricsEmitter` | Prometheus/Grafana, CloudWatch 등으로 내보낼 공통 메트릭 정의 (`frame_generate_fps`, `queue_ratio`, `sim_time_offset_ms`, `policy_switch_total`) | GenerationController, PipelineCoordinator, MultiSimSyncCoordinator, StorageWorker, `/status` 핸들러 | `/metrics`, OTLP exporter, `/status.metricsSummary` |
+| `DiagnosticsService` | Health check, heartbeat, structured logging, anomaly rule 평가 | Application Layer 로그 파이프, Worker Heartbeat, SceneTransitionService, Robotics gateway | `diagnostics.log`, alert hooks(Slack/Webhook), `diagnosticsReport` |
+
+- `ConfigSchemaRegistry`는 `config/schema/forge.schema.json` 파일을 기준으로 모든 문서/서비스가 참조할 수 있는 ID·필드 정의를 제공하며, Phase 2부터는 `forge schema diff` CLI를 통해 변경 알림을 생성한다.
+- `MetricsEmitter`는 FrameBus 이벤트 수신 시점, PipelineCoordinator BackPressureLevel 산출 시점, MultiSimSyncCoordinator Step 결과 등 핵심 지표를 표준 라벨(`session_id`, `scenario`, `policy_id`)과 함께 수집한다. `/status`는 이 값을 요약해 `metricsSummary` 필드로 내보내고, Prometheus는 `/metrics` 엔드포인트를 pull한다.
+- `DiagnosticsService`는 Scene 전환/Back-pressure/Robotics timeout 이벤트를 공통 포맷(`diagnostic_event.jsonl`)으로 기록하며, Deadlock 탐지나 강제 Resume 같은 자동 조치 결과를 `ProgressReporter`와 Slack/Webhook으로 동시에 전송한다. Phase 3부터는 Diagnostics 이벤트를 `Test Strategy` 문서의 Chaos 테스트에 재사용한다.
+- 로그·메트릭·Config 변경 정보를 한 곳에서 관리함으로써, 아키텍처 문서상 “상태를 어디서 어떻게 노출할지”를 명확히 정의하고, 보안 정책(인증·allowedHosts) 역시 Cross-cutting 레이어에서 일관되게 적용한다.
 
 ---
 

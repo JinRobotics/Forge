@@ -1,8 +1,4 @@
 
-> **문서 버전:** v1.0 (2025-02-14)  
-> **변경 이력:**  
-> - v1.0 (2025-02-14): 초기 작성
-
 ## 1. 목적
 
 Forge의 성능 목표를 정의하고,
@@ -37,11 +33,26 @@ FPS = 완료된 프레임 수 / 경과 시간(초)
 | 메모리 사용 | <4GB | <8GB | <16GB |
 | 디스크 I/O | <100MB/s | <200MB/s | <500MB/s |
 
+StorageWorker는 Phase 3(1M+ 프레임) 기준으로 **지속 쓰기 400MB/s 이상**을 목표로 하며, NVMe SSD 기준 70% 이상의 time-in-write가 발생하면 Worker 동시성을 늘리거나 압축 품질을 조정한다. 대용량 세션에서는 `storage.bandwidthTargetMBps` 설정값을 통해 워커가 예상 스루풋을 넘기지 못할 경우 경고를 발생시키고, `/status.metricsSummary.storageThroughput`에 실제 MB/s를 노출한다.
+
 ### 2.3 안정성 목표
 
 - **12시간 연속 실행**: 메모리 누수 <10% 증가
 - **파일 손상률**: <0.01% (100개/1M 프레임)
 - **라벨 정확도**: 100% (GT이므로 항상 정확)
+
+### 2.4 벤치마크 환경 (Baseline Hardware)
+
+| Phase | CPU | GPU | RAM | Storage | 비고 |
+|-------|-----|-----|-----|---------|------|
+| Phase 1 | 6C12T (Ryzen 5 5600) | RTX 3060 12GB | 32GB | NVMe SSD 1GB/s | Studio/개발자 PC 기준 |
+| Phase 2 | 8C16T (Ryzen 7 5800X) | RTX 3080 10GB | 32GB | NVMe SSD 2GB/s | AsyncGPU/6 camera 테스트 |
+| Phase 3 | 16C32T (Threadripper PRO 5955WX) | RTX 4090 24GB + RTX 3080* | 64GB | NVMe RAID 0 (4GB/s) | Multi-GPU, 대규모 세션 |
+| Phase 4 (Robotics) | 24C48T 서버급 | RTX 4090 + NVIDIA L40 (Isaac) | 128GB | NVMe + 10GbE NAS | Unity + Isaac 동시 실행 |
+
+- 모든 측정은 Ubuntu 22.04 LTS, .NET 8.0, Unity 2023 LTS 기준으로 수행한다.
+- CPU governor는 `performance`, GPU는 최대 전력 모드로 고정한다.
+- 하드웨어 업데이트가 필요한 경우 본 표와 7_Test_Strategy의 성능 섹션을 동시에 갱신한다.
 
 ---
 
@@ -129,6 +140,35 @@ python tools/analyze_performance.py /tmp/perf_baseline/meta/manifest.json
 - 최대 동시 인원 수 (안정적)
 - GPU/CPU 병목 지점
 - Queue overflow 발생 조건
+
+### 3.5 Scenario 5: Distributed Dual-Sim (Phase 4)
+
+**환경**:
+- Master 노드: 16C32T CPU, RTX 4090
+- Worker 노드(2대): 12C24T CPU, RTX 3080, 10GbE 네트워크
+- Simulation: Unity + Isaac (IRoboticsGateway) 동시 구동
+- 네트워크 지연 시뮬레이션: RTT 1ms / 5ms / 20ms (tc netem)
+- Duration: 200,000 frames
+
+**목표**:
+- FPS: 20~30 (RTT 1ms), 15~25 (5ms), 10~18 (20ms)
+- Back-pressure로 인한 Skip 비율: <3%
+- MultiSimSyncCoordinator의 `sync_offset_ms` 평균 <2ms, 99p <5ms
+
+**측정 항목**:
+- Worker별 FPS / queue_ratio / GPU 사용률
+- 네트워크 RTT별 Frame drop, sync timeout 횟수
+- Master ↔ Worker HTTP/gRPC latency (p50/p95)
+- Isaac 지연/장애 주입 시 FAIL/Skip 정책 동작
+
+**실행 방법**:
+```bash
+./scripts/run_distributed_benchmark.sh \
+  --workers 2 \
+  --latency 1ms,5ms,20ms \
+  --frames 200000 \
+  --config configs/distributed_dual_sim.json
+```
 
 ---
 

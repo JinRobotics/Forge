@@ -1,12 +1,3 @@
-Forge
-
----
-
-> **문서 버전:** v2.0 (2025-02-15)
-> **변경 이력:**
-> - v2.0 (2025-02-15): SessionManager 책임 분리, Rich Domain Model 도입, 메모리 풀링 적용
-> - v1.1 (2025-02-14): 데이터 모델/Worker 설명 정리, 버전 섹션 추가
-> - v1.0 (2024-12-01): 초기 작성
 
 ## 1. 문서 목적
 
@@ -261,6 +252,33 @@ classDiagram
 - `docs/design/10_Security_and_Compliance.md` 필터링 표를 단일 소스로 사용
 - CLI/서버 구현 가이드에 Config 직렬화/저장/로그 경로마다 Sanitizer 호출을 필수 단계로 명시 (누락 시 테스트 실패 유도)
 
+#### 3.2.2 ConfigSchemaRegistry (Cross-cutting)
+
+역할:
+- JSON Schema / YAML 스키마 / CLI validation 규칙을 **단일 소스**로 관리하고, `ConfigurationLoader`, SessionManager, Simulation/Data Pipeline 각 계층이 동일 정의를 사용하도록 한다.
+
+주요 책임:
+- `forge.schema.json` 로딩 및 버전 태깅 (`schemaVersion`, `minimumEngineVersion`)
+- `IEnumerable<SchemaDiff> Diff(string currentVersion, string targetVersion)` 제공해 Config 변경 알림/마이그레이션 표시
+- `SchemaValidationResult Validate(JObject config)`를 통해 Architecture 문서에서 요구한 필수 필드/enum 범위를 일관되게 검증
+- `ConfigSanitizer`와 공유하는 필드 메타데이터(API Key/Path 타입 여부) 노출
+
+주요 메서드:
+```csharp
+public interface IConfigSchemaRegistry {
+    string CurrentVersion { get; }
+    SchemaValidationResult Validate(JsonNode configNode);
+    IReadOnlyList<SchemaDiff> Diff(string baseVersion, string targetVersion);
+    SchemaMetadata GetFieldMetadata(string path);
+}
+```
+
+운영/문서 연계:
+- `docs/design/2_System_Architecture.md` §3.5 Cross-cutting Services와 동일 컴포넌트.
+- CLI(`forge validate-config`)와 서버 부팅 시 사전 검증에 사용, 실패 시 상세 사유/문서 링크 출력.
+- Schema 파일 위치: `docs/config/schema/forge.schema.json` (Git 관리) → build 시 코드로 embed.
+- Test Strategy 문서의 Config 회귀 테스트가 이 Registry를 직접 호출해 일관성 검증.
+
 ---
 
 ### 3.3 ProgressReporter
@@ -348,6 +366,26 @@ interface ICheckpointManager {
     SessionContext LoadCheckpoint(string checkpointPath);
     void CleanupOldCheckpoints(string sessionDirectory, int keepCount = 3);
 }
+
+#### 4.1-A-1 Checkpoint 서브 컴포넌트
+
+복잡도를 낮추기 위해 CheckpointManager는 다음 세 가지 협력 객체로 나뉜다.
+
+| 컴포넌트 | 책임 | 주요 입력/출력 |
+|----------|------|----------------|
+| `CheckpointIntegrityValidator` | Checksum/엔진 버전/스키마 버전/파일 구조 검증. ConfigSchemaRegistry 메타데이터와 연동하여 Config 필드 상태를 확인 | `Checkpoint` DTO → `IntegrityReport` |
+| `CheckpointStateRestorer` | Scenario/Pipeline/Tracking/Crowd/Stats 복원 로직을 캡슐화. 각 서브시스템의 `Restore(StateSnapshot)` 호출 순서를 보장 | `CheckpointState` → 성공 여부 |
+| `CheckpointMigrationService` (Phase 2+) | 과거 버전 체크포인트를 최신 포맷으로 변환. 허용 가능한 버전 범위/필드 변환 규칙 관리 | (checkpoint, targetVersion) → bool (migration 수행 여부) |
+
+구현 시퀀스:
+```
+SaveCheckpoint → IntegrityValidator.ComputeChecksum()
+LoadCheckpoint → IntegrityValidator.Validate()
+             → if (migrationNeeded) MigrationService.TryMigrate()
+             → StateRestorer.RestoreAll()
+```
+
+이 구조를 통해 CheckpointManager 본체는 orchestration 로직과 파일 입출력에 집중하고, 검증/복원/마이그레이션 로직은 개별 클래스로 테스트가 가능하도록 한다. Phase 2에서 MigrationService가 도입되지 않았더라도 인터페이스/DI 콤포넌트를 미리 정의해둬 기술 부채를 최소화한다.
 
 class CheckpointManager : ICheckpointManager {
     private const string CHECKPOINT_VERSION = "1.0.0";
@@ -2453,3 +2491,52 @@ DatasetStatistics 필드:
 오류 처리:
 - 개별 포맷 실패 시 registry 상태를 `failed`로 업데이트하고 사용자에게 경고.
 - 필수 포맷이 모두 실패하면 Session을 Warning 상태로 표시해 재생성 요구.
+
+### 8.5 MetricsEmitter (Cross-cutting)
+
+역할:
+- GenerationController, PipelineCoordinator, Simulation Layer, Worker 등에서 발생하는 핵심 지표를 수집해 `/metrics`(Prometheus)와 `/status.metricsSummary`에 제공한다.
+
+주요 인터페이스:
+```csharp
+public interface IMetricsEmitter {
+    void RecordFrameGenerated(string sessionId, long frameId, BackPressureLevel level, string frameRatePolicyId);
+    void RecordQueueDepth(string workerName, int length, int capacity);
+    void RecordLatency(string component, TimeSpan elapsed);
+    MetricsSnapshot GetSnapshot();
+}
+```
+
+설계 지침:
+- `PipelineCoordinator.UpdateMetrics()` 내에서 Worker 모니터 데이터를 `RecordQueueDepth`로 전달한다.
+- `MultiSimSyncCoordinator`가 Unity/Isaac step 지연을 `RecordLatency("robotics.sync", elapsed)`로 기록하고 timeout 발생 시 DiagnosticsService와 연계한다.
+- MetricsEmitter 구현은 Config(`monitoring.prometheus.enabled`)에 따라 InMemory/Prometheus/Noop 버전을 선택하며, Test/Benchmark 환경에서는 InMemory snapshot 비교를 수행한다.
+- `/status`는 `MetricsEmitter.GetSnapshot()` 결과 중 요약 지표만 반환하고 상세 시계열은 Prometheus exporter가 pull한다.
+
+### 8.6 DiagnosticsService
+
+역할:
+- Deadlock/Back-pressure/Scene 전환 실패/Robotics timeout 등 운영 이벤트를 구조화된 로그로 기록하고, 필요 시 알람 채널에 발행한다.
+
+주요 메서드:
+- `void RecordEvent(DiagnosticEvent evt)` // evt: type, severity, sessionId, frameId, details
+- `void PublishAlertsIfNeeded()` // severity ≥ Error → Slack/Webhook/CLI 경고
+- `DiagnosticsReport BuildReport(SessionContext session)` // SessionFinalizationService가 ProgressReporter/Manifest에 포함
+
+연동 포인트:
+- GenerationController의 Force Resume/FrameRatePolicy 전환, PipelineCoordinator의 Worker 장애 감지, SceneTransitionService 실패 시 DiagnosticsService 호출.
+- `/status` health check는 최신 critical 이벤트가 존재하면 HTTP 503을 반환하도록 DiagnosticsService 상태를 조회한다.
+- Chaos/Failover 테스트는 Diagnostics 이벤트를 기반으로 assertion을 수행해 운영 경보 품질을 검증한다.
+
+### 8.7 ConfigChangeAuditService (옵션)
+
+역할:
+- ConfigSchemaRegistry와 연동해 각 세션의 Config fingerprint를 기록하고, checkpoint/manifest/diagnostics에서 동일 값을 참조하도록 한다.
+
+주요 기능:
+- `void RecordConfigSnapshot(SessionConfig config, SchemaMetadata metadata)` → `config_audit.jsonl` 누적
+- `string ComputeFingerprint(SessionConfig config)` → Checkpoint/Manifest에 저장, 복구 시 mismatch 감지
+- `IReadOnlyList<ConfigDiff> Compare(SessionConfig a, SessionConfig b)` → CLI `forge audit-config`에서 사용
+
+효과:
+- Config가 여러 문서에 흩어져 있지 않고 Registry/AuditService를 통해 한 번 더 검증되며, 재현성/컴플라이언스 요구사항을 충족한다.

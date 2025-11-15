@@ -1,8 +1,3 @@
-# Forge - Test Strategy
-
-> **문서 버전:** v1.0 (2025-02-14)  
-> **변경 이력:**  
-> - v1.0 (2025-02-14): 초기 작성
 
 ## 1. 목적
 
@@ -283,6 +278,15 @@ public class FpsBenchmark
 - [ ] Baseline FPS 측정 (Factory, 3 cameras)
 - [ ] 메모리 누수 테스트 (1시간 실행)
 - [ ] Queue back-pressure 테스트
+- [ ] 성능 벤치마크 환경 고정:
+  - 하드웨어: Ubuntu 22.04, 8C16T CPU, 32GB RAM, RTX 3080 (Phase 2 기준) / Vulkan backend
+  - 소프트웨어: .NET 8.0, Unity LTS(2023.2.x 이상), NVIDIA 550+ 드라이버
+  - CPU governor `performance`, GPU power mode 최대치로 설정 후 2회 워밍업 실행
+  - BenchmarkDotNet 결과(`tests/performance/BenchmarkDotNet.Artifacts/`)는 `.gitignore`에 포함하고, `artifacts/perf/<date>/results.json`으로 복사하여 Performance Benchmark 문서에서 baseline과 비교
+- [ ] 퍼포먼스 회귀 감지:
+  - `tests/performance/CompareBaseline.cs`가 `baselines/perf_baseline.json`(Git LFS)과 최신 결과를 비교
+  - FPS ±10% 이상 변동, Peak memory +15% 이상, queue_ratio 평균 +0.1 이상이면 CI 실패
+  - baseline 갱신은 release 브랜치에서만 수행하며, 새로운 하드웨어 도입 시 본 문서/8_Performance_Benchmarks 모두에 스펙 업데이트
 
 ---
 
@@ -330,6 +334,15 @@ tests/
     ├── images/
     └── labels/
 ```
+
+### 4.1 테스트 데이터 관리 정책
+
+- **용량 관리**: `tests/fixtures/` 전체가 200MB를 넘지 않도록 하며, 5MB 이상 파일은 Git LFS 또는 원격 스토리지(S3/GCS)로 이전한다. README에 각 fixture의 출처/용도/라이선스를 명시한다.
+- **FixtureBuilder**: 단위/통합 테스트는 `tests/shared/FixtureBuilder`를 통해 메모리 내 synthetic 데이터를 생성해 디스크 의존을 최소화한다.
+- **Golden Files**: manifest/label 비교는 `tests/fixtures/golden/`을 사용하며, `UPDATE_GOLDEN=true dotnet test` 플래그로만 업데이트한다. PR 설명에 변경 사유를 남긴다.
+- **Clean-up**: E2E/Performance 테스트는 `/tmp/forge-tests/<testName>`에 출력 후 종료 시 `rm -rf`한다. CI는 always() 단계에서 `/tmp/forge-tests`를 삭제한다.
+- **원격 아티팩트**: 대형 Unity scene/asset은 `tests/fixtures/remote/manifest.json`에 정의된 위치에서 다운로드하며, CI는 캐시 디렉터리에 저장해 재사용한다.
+- **민감 정보**: fixture config에는 API Key/토큰/사용자 경로를 포함하지 않고, 필요 시 `${ENV_VAR}` placeholder를 사용한다.
 
 ---
 
@@ -501,6 +514,13 @@ public void Example_Test()
 - 단위 테스트: < 100ms per test
 - 통합 테스트: < 5s per test
 - E2E 테스트: < 5min per test
+
+### 8.5 로컬 실행 가이드
+- `dotnet test tests/unit --filter Category=Fast`로 빠른 단위 테스트만 실행하고, `Category=Slow`는 CI/야간 빌드에서 실행되도록 `[Trait("Category","Slow")]`를 부여한다.
+- 특정 영역만 검증할 때는 `dotnet test tests/unit/Orchestration --filter SessionManager`처럼 디렉터리와 필터를 조합해 시간을 줄인다.
+- E2E 스크립트는 `tests/e2e/test_basic_session.sh --frames 200` 옵션으로 단축 실행 후, CI에서는 기본 1,000프레임 구성으로 실행한다.
+- Unity PlayMode/EditorMode 테스트는 `scripts/run_unity_tests.sh` wrapper를 사용해 OS마다 동일한 CLI(`unity -runTests -projectPath ...`)를 호출한다.
+- 퍼포먼스 테스트 후 `dotnet clean && rm -rf tests/**/bin tests/**/obj BenchmarkDotNet.Artifacts`를 실행해 이전 측정이 남지 않도록 한다.
 
 ---
 

@@ -1,6 +1,6 @@
 ## 1. Overview
 
-Forge는 다양한 현장 감시·로봇·시설 카메라 환경에서 수집·라벨링하기 어려운 **대규모·고품질·정밀 라벨 합성 데이터셋**을 **반복 가능(reproducible)** 하고 **온프레미스에서도 안전하게** 자동 생성하는 엔진이다.
+Forge는 다양한 현장 감시·로봇·시설 카메라 환경에서 수집·라벨링하기 어려운 **대규모·고품질·정밀 라벨 합성 데이터셋**을 **반복 가능(reproducible)** 하고 **온프레미스에서도 안전하게** 자동 생성하는 엔진이며, 특히 **고정형 + 모바일(로봇) 카메라**를 동시에 제어·생성할 수 있는 것이 차별 요소다.
 
 Forge는 다음과 같은 Vision 기반 Task를 타겟으로 한다:
 - Multi-Object Tracking (MOT)
@@ -11,6 +11,10 @@ Forge는 다음과 같은 Vision 기반 Task를 타겟으로 한다:
 - 감염병 동선 추적 시뮬레이션
 - 현장 카메라 기반 Edge NPU 모델 검증
 - Sim-to-Real 연구
+
+특히 **Occlusion / Visibility reasoning**은 ReID·Tracking 품질을 좌우하는 핵심 GT이므로, Scene·카메라 구성을 설계하는 초반 단계에서부터 “가려짐/시야 확보”를 핵심 문제로 다룬다.
+
+또한 합성 데이터 신뢰성을 보증하기 위해 **Validation/Statistics/Manifest** 기반 Dataset 품질 검증이 상단 개념 설계에 포함되어 있다.
 
 Forge는 사용자 정의 **Scenario/Scene/Camera/Crowd/Randomization**을 바탕으로  **정밀한 GT(ground truth)** 를 갖춘 대량 데이터셋을 생성하며,  동일 Config로 반복 실행 시 **동일한 데이터셋 재생성**이 보장된다.
 
@@ -81,6 +85,19 @@ Forge는 사용자 정의 **Scenario/Scene/Camera/Crowd/Randomization**을 바�
     - 재현 가능한 실험 환경 제공
     - 랜덤화 강도 조절
     - 통계/manifest 기반 자동 품질 요약 제공
+
+### UC-04: 로봇 카메라 기반 감시/순찰 시나리오
+
+- Scene: 병원·물류창고·주차장 등 이동 경로가 긴 시설 공간
+- Camera: 고정형 감시 카메라 + SLAM 기반 모바일 로봇 카메라(순찰 경로 다중 프리셋)
+- Control:
+    - 로봇 속도/경로/회전 각도 랜덤화
+    - 움직이는 군중이 로봇 시야를 가리는 occlusion 이벤트 집중 생성
+    - Edge NPU용 저해상도/와이드 FOV 설정
+- Output:
+    - 로봇 시야 중심의 Tracking/ReID 데이터
+    - 모바일 카메라 전용 occlusion/visibility GT
+    - 순찰 루틴별 QA/Validation 통계 로깅
 
 ---
 

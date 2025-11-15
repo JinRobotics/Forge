@@ -1,17 +1,10 @@
-# Forge Phase 4: Robotics Fidelity Extension
-
-> **문서 버전:** v1.0 (2025-11-15)
-> **변경 이력:**
-> - v1.0 (2025-11-15): 초기 작성 (Phase 4 기획)
-
----
 
 ## 1. 목적 (Purpose)
 
 **Phase 4의 목표**:
 
 > 기존 Forge가 제공하는 **CCTV + Mobile RGB 중심 합성 데이터 엔진**을
-> **로봇용 센서 Ground Truth (LiDAR, IMU, Wheel Odometry, Depth, Trajectory/SLAM GT)**까지 확장해,
+> **로봇용 센서 Ground Truth (LiDAR, IMU, Wheel Odometry, Depth, Trajectory/SLAM GT)** 까지 확장해,
 > "Full Robotics Perception Dataset Generator"로 업그레이드한다.
 
 ### 핵심 가치
@@ -536,10 +529,11 @@ public class MultiSimSyncCoordinator
         stopwatch.Stop();
 
         // Sync 지연 모니터링
-        _isaacLatency.Add(stopwatch.Elapsed.TotalMilliseconds);
-        if (stopwatch.Elapsed > _maxSyncDelay)
+        var elapsedMs = stopwatch.Elapsed.TotalMilliseconds;
+        _isaacLatency.Add(elapsedMs);
+        if (elapsedMs > _maxSyncDelay.TotalMilliseconds)
         {
-            _logger.LogWarning($"Frame {frameId} sync delay: {stopwatch.ElapsedMilliseconds}ms");
+            _logger.LogWarning($"Frame {frameId} sync delay: {elapsedMs:F1}ms");
         }
 
         // FrameId 일관성 검증
@@ -574,12 +568,28 @@ public class MultiSimSyncCoordinator
     {
         var avgLatency = _isaacLatency.Average;
 
-        if (avgLatency > 200) return BackPressureLevel.Critical;  // 200ms 초과
-        if (avgLatency > 100) return BackPressureLevel.Warning;   // 100ms 초과
+        if (avgLatency > _syncPolicy.CriticalLatencyMs) return BackPressureLevel.Critical;
+        if (avgLatency > _syncPolicy.WarningLatencyMs) return BackPressureLevel.Warning;
         return BackPressureLevel.Normal;
     }
 }
 ```
+
+**Jitter/Latency 설정**:
+
+- `RoboticsConfig.syncPolicy`에 다음 필드를 제공한다:
+  ```json
+  "syncPolicy": {
+    "maxDelayMs": 80,
+    "warningLatencyMs": 100,
+    "criticalLatencyMs": 200,
+    "maxJitterMs": 5,
+    "timeoutMs": 5000,
+    "onTimeout": "skip"
+  }
+  ```
+- Unity와 Isaac의 timestamp 차이가 `maxJitterMs`보다 크면 `DiagnosticsService`가 `robotics_jitter` 이벤트를 생성하고, StageStatus에 `Sensors.JitterExceeded=true`를 기록한다.
+- Timeout 발생 시 `onTimeout` 정책(`skip`/`pause`/`abort`)을 적용하여 GenerationController가 프레임을 drop하거나 일시정지할 수 있다. 기본값은 `pause`.
 
 ---
 
@@ -715,6 +725,41 @@ public class IsaacRoboticsGateway : IRoboticsGateway
 }
 ```
 
+##### 통신 채널 및 프로토콜
+
+- **gRPC** (권장): Isaac Sim은 `RoboticsSim` gRPC 서비스를 노출한다.
+  ```protobuf
+  service RoboticsSim {
+      rpc Connect(ConnectRequest) returns (ConnectResponse);
+      rpc LoadRobot(RobotModelRequest) returns (Ack);
+      rpc ConfigureSensor(SensorConfigRequest) returns (Ack);
+      rpc StepSimulation(StepRequest) returns (StepResponse); // 포함된 센서 payload
+      rpc GetPose(google.protobuf.Empty) returns (RobotPose);
+      rpc Shutdown(google.protobuf.Empty) returns (Ack);
+  }
+  message StepResponse {
+      int64 frame_id = 1;
+      double simulation_time = 2;
+      RobotPose pose = 3;
+      bytes lidar_bytes = 4;
+      ImuReading imu = 5;
+      WheelOdom odom = 6;
+      DepthImage depth = 7;
+  }
+  ```
+- **REST 대체 경로** (디버그/Mock 용):
+  - `POST /api/robotics/connect`
+  - `POST /api/robotics/step` → JSON 응답에 Pose/IMU/Odom, LiDAR/Depth는 Signed URL 또는 chunked 바디
+  - `GET /api/robotics/pose`
+  - REST 호출 역시 HTTPS + API Key/mTLS를 강제한다.
+- **대용량 센서 데이터**:
+  - LiDAR/Depth 데이터는 Base64 인코딩 대신 gRPC 스트리밍이나 Zero-copy 공유 메모리(Isaac Native handle)를 사용해 성능을 확보한다.
+  - Worker가 다수 존재하는 분산 모드에서는 ZMQ/UDP 기반 데이터 채널을 추가하고 `IRoboticsGateway`가 `ISensorStreamProvider`로부터 pull하도록 확장할 수 있다.
+- **네트워크/보안**:
+  - 기본 포트: gRPC `6006`, REST `6080`. Config로 override.
+  - 서버는 TLS 인증서를 로드하고 `allowedClients` IP 목록으로 접근을 제한한다.
+  - 10GbE 이상의 네트워크 환경을 권장하며, WAN 시나리오에서는 latency 모니터링(§4.3.1)과 Retry 정책을 강화한다.
+
 ---
 
 #### 4.3.4 SensorExportWorker
@@ -782,6 +827,28 @@ public class SensorExportWorker
     }
 }
 ```
+
+**SLAM 포맷 세부 규칙**:
+
+- **TUM RGB-D**  
+  - `rgb.txt`: `<timestamp> rgb/<frame>.png`  
+  - `depth.txt`: `<timestamp> depth/<frame>.png`  
+  - `groundtruth.txt`: `<timestamp> tx ty tz qx qy qz qw`  
+  - timestamp는 `FrameContext.SimulationTime`을 사용하고 소수점 6자리까지 기록한다.  
+  - RGB/Depth 파일 경로는 StorageWorker가 생성한 구조(`images/cam01/frame_xxx.png`)를 재사용한다.
+
+- **KITTI Odometry**  
+  - `poses/XX.txt`: 각 라인이 12개 float(3x4 matrix). RobotPose를 회전행렬로 변환해 기록.  
+  - `times.txt`: 초 단위 timestamp 리스트.  
+  - LiDAR는 `velodyne/XXXXXX.bin` (float32 x,y,z,intensity) 형식으로 저장하고, IMU/Odom은 `oxts/data/XXXXXX.txt` 규격을 따른다.  
+  - Camera/LiDAR extrinsic은 `calib.txt`에 기록.
+
+- **Forge Custom**  
+  - `sensors/forge/frame_<id>.json`에 Pose/LiDAR/IMU/Odom/Depth 메타데이터를 JSON으로 묶는다.  
+  - 대용량 배열은 `sensors/forge/frame_<id>.bin`으로 분리하고 JSON에는 오프셋/길이를 기록한다.  
+  - `sensorQuality.json`에는 frame별 quality score, jitter, drift 정보를 누적하여 ValidationService가 활용한다.
+
+- 포맷별 활성화는 `sensorExport.formats[]`로 제어하며, 특정 센서가 비활성화된 경우 해당 포맷 항목을 건너뛴다.
 
 ---
 

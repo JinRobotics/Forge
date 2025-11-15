@@ -33,7 +33,6 @@ Phase 2 이후에는 **최소 3개 Scene**을 제공해야 하며,
 - 해상도(예: 720p/1080p)  
 - 출력 포맷(JPG/PNG)
 - 카메라 고유 ID
-- (값 목록은 SR에서 구체화)
 - 카메라는 고정형 또는 이동형(로봇)으로 구성할 수 있으며, 이동형 카메라는 경로(waypoints)/속도/센서 노이즈(rolling shutter, motion blur)/시간 가변 extrinsic을 Config에서 정의해야 한다.
 
 ---
@@ -61,7 +60,7 @@ Phase별 목표:
 - Track ID (카메라별)  
 - Global ID (Scene/session 전체)  
 
-※ 정확도·계산 방식은 SR/LDD에서 정의.
+※ 정확도·계산 방식은 후속 설계 산출물에서 구체화한다.
 
 ---
 
@@ -130,7 +129,7 @@ Phase 1에서는 기본 조명만 제공하면 된다.
 - bbox/라벨 값 범위 검증 결과  
 - 이미지-라벨 매칭 여부  
 - 통계 요약 (사람 수, detection 수, occlusion histogram 등)  
-표시 형식은 SR에서 정의.
+표시 형식은 요구사항 수준에서 정의된 항목을 모두 포함해야 한다.
 
 ---
 
@@ -145,7 +144,7 @@ Phase 1에서는 기본 조명만 제공하면 된다.
 - OS: Windows, Linux  
 - GPU: NVIDIA 기반 환경  
 
-(지원 범위는 SR에서 구체화)
+지원 범위는 요구사항 수준에서 명시한 OS/GPU를 최소 기준으로 한다.
 
 ---
 
@@ -211,8 +210,55 @@ Resume 시 이 정보를 활용해 이어서 진행할 수 있어야 한다.
 
 ---
 
+### UR-24. 표준 `/metrics` 런타임 노출
+시스템은 Prometheus 호환 `/metrics` 엔드포인트를 제공해야 하며, 다음 지표를 최소 1초 간격으로 노출해야 한다:
+- FPS(현재/평균), Stage별 처리 FPS
+- CPU/GPU 사용률 및 메모리 사용량
+- 주요 Queue depth (Capture/Label/Encode 등)
+- Stage별 처리 지연 시간(percentile 포함)
+
+---
+
+### UR-25. 세션 종료 성능 요약 리포트
+세션이 종료되면 시스템은 다음 정보를 요약 리포트/manifest에 포함해야 한다:
+- 평균/최소/최대 FPS
+- Stage별 Max queue depth
+- GPU/CPU peak usage, 메모리 peak
+- Retry/Drop/GAP 카운트
+- `/metrics` 스냅샷 경로 또는 참조
+
+---
+
+### UR-26. 로봇 카메라 Pose Export 및 Manifest
+Multi-camera 구성이 로봇 카메라를 포함할 경우, 시스템은 다음을 Dataset/Manifest에 필수 포함해야 한다:
+- Frame별 extrinsic(위치·회전), pose covariance
+- 경로(waypoints), 속도 프로파일, SLAM 상태(유효/드리프트) 메타데이터
+- ReID/Robotics/SLAM 연계를 위한 timestamp, camera_id, Sensor sync flag
+- Pose 품질 지표(RMSE, drift) 및 누락 시 fallback 정책
+
+---
+
 ## 4. 고급/선택 요구사항 (기업 운영 관점)
 - strict/relaxed 품질 모드 노출 및 드롭/재시도 카운트 UI 제공
 - Scene 시퀀스 프리뷰 및 예상 소요 시간 표시
 - 오류 발생 시 정책 선택(continue/retry/abort)을 UI/CLI에서 직접 지정
 - Liveness/Readiness 상태와 `/status` 요약 지표를 운영 대시보드(Grafana 등)로 확인 가능
+
+---
+
+## 5. Phase 4 Robotics 확장 요구사항
+
+### UR-41. 센서 GT 동시 지원
+Phase 4에서는 RGB 데이터와 함께 LiDAR, Depth, IMU, Odometry 센서 GT를 동시 생성·Export할 수 있어야 하며,
+- 각 센서는 frame/timestamp 기준으로 RGB와 동기화돼야 하고
+- Sensor 노이즈/캘리브레이션 파라미터를 Manifest에 포함해야 한다.
+
+### UR-42. 로보틱스 포맷 지원
+사용자는 Phase 4부터 다음 표준 포맷으로 Export를 선택할 수 있어야 한다:
+- TUM RGB-D, KITTI Odometry/Raw
+- 레이저 스캔/IMU를 포함한 Rosbag (선택)
+- 포맷별 필수 필드 누락 시 검증 오류를 제공한다.
+
+### UR-43. 센서 동기화 정확도
+Robotics 세션에서 시스템은 RGB + 센서 스트림 동기화 정확도를 **±1ms 이내**로 유지해야 하며,
+- 동기화 실패 시 경고 및 영향 구간을 리포트해야 한다.
