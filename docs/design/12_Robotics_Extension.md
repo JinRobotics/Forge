@@ -100,6 +100,7 @@ output/session_xxx/
 - `FrameContext` 단위로 CCTV/Unity RGB 라벨과 로봇 센서 GT를 **동일 FrameId/Timestamp 기준으로 정렬**
 - Unity와 Isaac Sim의 시뮬레이션 시간이 **동일 step**으로 진행
 - 센서마다 다른 샘플링 주파수를 **Frame-aligned sampling**으로 통일
+- **동기화 정확도**: RGB ↔ 센서 타임스탬프 차이가 ±1ms 이내여야 하며, `syncPolicy.maxDelayMs` 기본값은 `1.0`으로 설정한다(UR-43). MetricsEmitter는 `sensor_sync_offset_ms_avg/p99`를 기록하고, manifest.validationSummary.sensorDriftWarning에 허용 초과 여부를 명시한다.
 
 **구현 규칙**:
 ```csharp
@@ -131,11 +132,11 @@ public record FrameContext
 **Config 예시**:
 ```json
 {
-  "robotics": {
-    "enabled": true,
-    "backend": "isaac",
-    "syncPolicy": {
-      "maxDelayMs": 100,
+    "robotics": {
+      "enabled": true,
+      "backend": "isaac",
+      "syncPolicy": {
+      "maxDelayMs": 1.0,
       "timeoutMs": 5000,
       "onTimeout": "skip"
     },

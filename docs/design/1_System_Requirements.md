@@ -227,6 +227,7 @@ Session 종료 시 다음 내용을 포함한 manifest.json을 생성해야 한�
 - Statistics  
 - Validation 결과  
 - Output 정보  
+- `performanceSummary` (UR-25): 평균/최소/최대 FPS, Stage별 Max queue depth, GPU/CPU peak usage, 메모리 peak, Retry/Drop/GAP 카운트, `/metrics` 스냅샷 경로 또는 해시
 
 ---
 
@@ -240,6 +241,11 @@ Session 종료 후 다음 포맷 중 선택하여 export 가능해야 한다:
 - JSON (기본)
 - YOLO (Phase 2+)
 - COCO (Phase 2+)
+
+### **FR-27-1. Export 디렉터리/파일 구조 선택**
+- 사용자는 Config에서 Export 디렉터리 스킴(단일 Session 루트 vs 세션ID 하위 디렉터리 등)을 선택할 수 있어야 한다.
+- 선택된 스킴은 이미지/라벨/ReID/Edge/센서 아티팩트 전체에 적용되고, SessionFinalizationService는 manifest.exportLayout에 실제 구조와 경로 패턴(예: `{session}/images/{camera}`)을 기록해야 한다.
+- CLI/UI는 Session 시작 전 선택 내용을 검증하고, Validation 단계는 출력 경로 스캔 시 선택된 스킴과 실제 구조의 일치 여부를 확인해야 한다. (UR-21)
 
 ### **FR-28. Edge-NPU Export (Phase 3+)**
 Edge 디바이스 용도를 위해 다음을 지원해야 한다:
@@ -287,7 +293,9 @@ Robotics Extension 문서(`docs/design/12_Robotics_Extension.md`)에서 정의�
 
 ### **FR-42. Frame-aligned 센서 동기화**
 - `FrameContext`는 `RobotPose` 및 `SensorMeta`를 포함할 수 있어야 하며, Unity/Isaac 시뮬레이션 시간은 동일 deltaTime을 사용한다.
-- `syncPolicy`(maxDelayMs, timeoutMs, onTimeout)를 만족해야 하며, 허용 지연 초과 시 strict 모드는 세션을 FAIL, relaxed 모드는 해당 센서 샘플을 drop 처리 후 manifest에 기록한다.
+- `syncPolicy`(maxDelayMs, timeoutMs, onTimeout)를 만족해야 하며, **RGB + 센서 스트림 동기화 정확도는 ±1ms 이내**여야 한다(UR-43).
+- 허용 지연 초과 시 strict 모드는 세션을 FAIL, relaxed 모드는 해당 센서 샘플을 drop 처리 후 manifest.sensorArtifacts[].syncDriftExceeded=true로 기록한다.
+- Validation 단계는 sensor pose 타임스탬프를 기준으로 편차를 계산해 manifest.validationSummary.sensorDriftWarning에 결과를 기록하고, `/metrics`에는 `sensor_sync_offset_ms` 평균/99p를 노출해야 한다.
 
 ### **FR-43. Config 기반 Robotics 정의**
 - SessionConfig는 `robotics.enabled`, `backend`, `robotModel`, 센서별 on/off 및 노이즈 파라미터를 선언할 수 있어야 하며, Orchestration 계층은 이를 검증해야 한다.

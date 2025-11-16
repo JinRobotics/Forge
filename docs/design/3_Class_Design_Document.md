@@ -699,6 +699,7 @@ class SessionFinalizationService : ISessionFinalizationService {
     private readonly IValidationService _validation;
     private readonly IStatsService _stats;
     private readonly IManifestService _manifest;
+    private readonly IMetricsCollector _metrics;
 
     public async Task<FinalizationResult> Finalize(SessionContext session) {
         _logger.LogInformation($"Finalizing session {session.Config.SessionId}");
@@ -709,14 +710,23 @@ class SessionFinalizationService : ISessionFinalizationService {
         // 2. Statistics
         var statistics = await _stats.GenerateAsync(session);
 
-        // 3. Manifest
-        var manifest = _manifest.Build(session, statistics, validationReport);
+        // 3. Performance summary (UR-25)
+        var perf = await _metrics.BuildPerformanceSummaryAsync(session.SessionId);
+        //    - 평균/최소/최대 FPS (FrameBus 이벤트 기반)
+        //    - Stage별 Max queue depth (PipelineCoordinator)
+        //    - GPU/CPU/메모리 peak (MetricsEmitter)
+        //    - Retry/Drop/GAP 카운트
+        //    - `/metrics` 스냅샷 파일 경로 또는 해시
+
+        // 4. Manifest (Export layout 포함)
+        var manifest = _manifest.Build(session, statistics, validationReport, perf);
         await _manifest.SaveAsync(manifest, session.SessionDirectory);
 
-        // 4. 결과 요약
+        // 5. 결과 요약
         var result = new FinalizationResult {
             ValidationReport = validationReport,
             Statistics = statistics,
+            PerformanceSummary = perf,
             ManifestPath = Path.Combine(session.SessionDirectory, "meta", "manifest.json"),
             Success = validationReport.IsValid
         };
@@ -724,6 +734,32 @@ class SessionFinalizationService : ISessionFinalizationService {
         _logger.LogInformation($"Session finalization complete: {result.Success}");
         return result;
     }
+}
+
+public class FinalizationResult {
+    public ValidationReport ValidationReport { get; init; }
+    public Statistics Statistics { get; init; }
+    public PerformanceSummary PerformanceSummary { get; init; }
+    public string ManifestPath { get; init; }
+    public bool Success { get; init; }
+}
+
+public class PerformanceSummary {
+    public double AvgFps { get; init; }
+    public double MinFps { get; init; }
+    public double MaxFps { get; init; }
+    public Dictionary<string, int> StageMaxQueueDepth { get; init; }
+    public double CpuPeak { get; init; }
+    public double GpuPeak { get; init; }
+    public double MemoryPeakGb { get; init; }
+    public RetryDropStats RetryDrop { get; init; }
+    public string MetricsSnapshotPath { get; init; }
+}
+
+public class RetryDropStats {
+    public long RetryCount { get; init; }
+    public long DropCount { get; init; }
+    public long GapCount { get; init; }
 }
 ```
 
@@ -2466,7 +2502,7 @@ DatasetStatistics 필드:
 - manifest.json 생성.
 
 주요 메서드:
-- Manifest Build(SessionContext session, DatasetStatistics stats, ValidationReport validation)
+- Manifest Build(SessionContext session, DatasetStatistics stats, ValidationReport validation, PerformanceSummary perf)
 - void Save(Manifest manifest, string path)
 
 필드(Manifest):
@@ -2477,6 +2513,8 @@ DatasetStatistics 필드:
 - frames stats
 - labels info
 - quality info
+- performanceSummary (UR-25)
+- exportLayout (UR-21: 사용자 선택 스킴, 실제 경로 패턴/예: `{sessionRoot}/{artifact}/{camera}`), metricsSnapshot
 
 ---
 
