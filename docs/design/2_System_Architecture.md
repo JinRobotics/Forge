@@ -42,7 +42,7 @@ graph TB
     end
 
     subgraph Bridge["Simulation Gateway"]
-        SimGateway[SimulationGateway<br/>(InProcess/HTTP)]
+        SimGateway["SimulationGateway\n(InProcess/HTTP)"]
     end
 
     subgraph Simulation["Simulation Layer (Unity)"]
@@ -63,15 +63,15 @@ graph TB
         Assembler[LabelAssembler]
         Encode[EncodeWorker]
         Storage[StorageWorker]
-        ReIDExport[ReIDExportWorker<br/>Phase 2+]
-        EdgeExport[EdgeExportWorker<br/>Phase 3+]
+        ReIDExport["ReIDExportWorker\n(Phase 2+)"]
+        EdgeExport["EdgeExportWorker\n(Phase 3+)"]
     end
 
     subgraph Services["Services"]
         Validation[ValidationService]
         Stats[StatsService]
         Manifest[ManifestService]
-        EdgeSvc[EdgeExportService<br/>Phase 3+]
+        EdgeSvc["EdgeExportService\n(Phase 3+)"]
     end
 
     AppCmd --> ConfigLoader
