@@ -21,6 +21,8 @@
 각 레이어는 **Config 기반**으로 느슨하게 결합되며,
 Unity 메인 스레드 제약을 고려하여 Simulation과 Pipeline의 경계를 명확히 한다.
 
+> 분산(distributed) 모드에서 Worker/Master 상호작용, Global ID 할당, Failover 전략은 `docs/design/13_Distributed_Architecture.md`를 참조한다.
+
 ### 시스템 아키텍처 다이어그램
 
 ```mermaid
@@ -470,7 +472,17 @@ public record CameraPose(
 - ✅ Unity 버전 업그레이드 시 영향 최소화
 
 
-#### 3.3.1 EnvironmentService
+#### 3.3.1 Unity Main Thread Execution Model
+
+- PlayerLoop 순서(PreUpdate → Update → LateUpdate → Rendering → AsyncGPUReadback)를 기준으로 FrameContext, Capture, Label 단계의 실행 타이밍을 정의한다.
+- FrameContext는 `Update()` 종료 직전에 Crowd/Cameras 상태를 스냅샷하고 frame_id/timestamp를 결정한다. Remote/HTTP Gateway도 동일 타이밍에 `GenerateFrameAsync`를 호출하도록 coroutine 기반 스케줄러를 사용한다.
+- Capture는 Main Thread/LateUpdate에서 수행하며, AsyncGPUReadback을 사용할 경우 요청 프레임과 완료 프레임을 `captureSequenceId`로 매핑해 지연을 보정한다.
+- Script Execution Order를 `EnvironmentService → CrowdService → CameraService → CaptureBridge` 순으로 고정해 Scene 전환과 pose 기록이 deterministic 하게 유지되도록 한다.
+- FixedUpdate 주기가 Update보다 촘촘하더라도 FrameContext.timestamp는 `Time.time`(시뮬레이션 월드 시간)을 사용하며, Config/Checkpoint에 `time.fixedDeltaTime`을 기록해 Resume 시 동일 주기를 강제한다.
+
+자세한 PlayerLoop 다이어그램은 `docs/design/11_Unity_Integration_Guide.md` “Execution Timeline” 절을 참조한다.
+
+#### 3.3.2 EnvironmentService
 
 - Scene Pool 관리 (Scene 로딩/활성화/비활성화)
 - 활성 Scene의 메타데이터 제공:
@@ -479,8 +491,9 @@ public record CameraPose(
   - `SceneAssetRegistry`가 업로드된 `.fbx/.obj/.unitypackage/AssetBundle`을 검증·변환하여 Unity Addressables/AssetBundle로 등록
   - Manifest 기준 좌표계/단위/NavMesh/조명 데이터를 `SceneMetadataStore`에 기록
   - 등록 실패 시 Diagnostics 이벤트 발행 및 사용자에게 피드백
+  - 전체 워크플로우와 메타데이터 스키마는 `docs/design/14_Scene_Asset_Registry.md`를 참조한다.
 
-#### 3.3.2 CameraService
+#### 3.3.3 CameraService
 
 - 카메라 등록/해제, Config 기반 초기화
 - 카메라 위치/FOV/해상도 상태 유지
@@ -488,7 +501,7 @@ public record CameraPose(
 - 카메라별 `camera_id` 관리
 - 이동형 카메라 pose 업데이트: `MobileCameraController`와 협력하여 경로/속도/pose 적용, `CameraPoseProvider`를 통해 프레임별 pose 기록
 
-#### 3.3.3 CrowdService
+#### 3.3.4 CrowdService
 
 - 인물(Pawn/Agent) 생성/제거
 - 인원 수 범위를 상위 요구사항에서 정의한 값으로 유지

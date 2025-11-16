@@ -30,6 +30,7 @@
 - **Global ID**: Session 전체에서 동일 인물을 식별하는 ID
 - **Track ID**: 카메라별 temporal ID
 - **Config**: 사용자 설정(환경/카메라/군중/출력 옵션 포함)
+- ※ 세부 필드/신호 명칭은 `docs/design/common/terminology.md`를 기준으로 사용한다.
 
 ---
 
@@ -71,6 +72,7 @@ Scene 전환은 **Session 중간에 1회 이상** 발생할 수 있다.
 - 시스템은 사용자가 업로드한 Unity 호환 Scene Asset(.fbx/.obj/.unitypackage/AssetBundle 등)을 Scene Pool에 등록할 수 있어야 한다.
 - Asset 등록 시 메타데이터(JSON Manifest)를 검증하고, 좌표계/단위/NavMesh/조명/충돌 레이어 정보를 추출해 저장한다.
 - 검증된 Asset은 다른 기본 Scene과 동일한 방식으로 Config/Scenario에서 선택 가능해야 하며, 실패 시 원인과 수정 방법을 리포트해야 한다.
+- 세부 업로드/검증 흐름과 메타데이터 스키마는 `docs/design/14_Scene_Asset_Registry.md`의 단일 소스 정의를 따른다.
 
 ---
 
@@ -228,6 +230,7 @@ Session 종료 시 다음 내용을 포함한 manifest.json을 생성해야 한�
 - Validation 결과  
 - Output 정보  
 - `performanceSummary` (UR-25): 평균/최소/최대 FPS, Stage별 Max queue depth, GPU/CPU peak usage, 메모리 peak, Retry/Drop/GAP 카운트, `/metrics` 스냅샷 경로 또는 해시
+- 구조와 필드 정의는 `docs/design/schema/manifest.schema.json`(단일 소스)을 따른다.
 
 ---
 

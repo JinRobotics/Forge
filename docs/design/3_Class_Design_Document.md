@@ -2515,6 +2515,7 @@ DatasetStatistics 필드:
 - quality info
 - performanceSummary (UR-25)
 - exportLayout (UR-21: 사용자 선택 스킴, 실제 경로 패턴/예: `{sessionRoot}/{artifact}/{camera}`), metricsSnapshot
+- 모든 DTO/직렬화 결과는 `docs/design/schema/manifest.schema.json`에 정의된 JSON Schema와 계약 테스트로 검증한다.
 
 ---
 

@@ -1,0 +1,47 @@
+# OS / Editor artifacts
+.DS_Store
+Thumbs.db
+*.swp
+*.tmp
+
+# IDE settings
+.vscode/
+.idea/
+*.code-workspace
+
+# Visual Studio / Rider
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# .NET build outputs
+bin/
+obj/
+**/bin/
+**/obj/
+project.lock.json
+project.fragment.lock.html
+artifacts/
+
+# Logs / coverage / test artifacts
+*.coverage
+*.coveragexml
+coverage/
+TestResults/
+*.log
+
+# Pipeline generated assets (kept outside git)
+pipeline/validation/
+pipeline/logs/
+pipeline/export/
+
+# Unity / Simulation cache (future)
+Library/
+Temp/
+Logs/
+obj.meta
+Build/
+Builds/
+UserSettings/

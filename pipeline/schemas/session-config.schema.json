@@ -76,19 +76,45 @@
   "definitions": {
     "SceneConfig": {
       "type": "object",
-      "required": ["name", "durationFrames"],
+      "required": ["durationFrames"],
       "properties": {
         "name": {
           "type": "string",
-          "description": "Scene name",
-          "enum": ["Factory", "Office", "Warehouse", "Hospital", "Military"]
+          "description": "Scene name. Built-in Scene 또는 Scene Asset Registry ID",
+          "pattern": "^[A-Za-z0-9_\\-:.]+$",
+          "examples": ["Factory", "Office", "custom:Factory_Custom_A:2024.03"]
+        },
+        "type": {
+          "type": "string",
+          "enum": ["builtin", "custom"],
+          "default": "builtin",
+          "description": "custom 선택 시 assetId 필수"
+        },
+        "assetId": {
+          "type": "string",
+          "description": "Scene Asset Registry에서 승인된 assetId (sceneName:version)",
+          "pattern": "^[A-Za-z0-9_\\-]+:[A-Za-z0-9_.-]+$"
         },
         "durationFrames": {
           "type": "integer",
           "description": "Number of frames to generate in this scene",
           "minimum": 1
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "type": { "const": "custom" } }
+          },
+          "then": { "required": ["name", "assetId"] }
+        },
+        {
+          "if": {
+            "properties": { "type": { "const": "builtin" } }
+          },
+          "then": { "required": ["name"] }
+        }
+      ]
     },
     "CameraConfig": {
       "type": "object",
@@ -595,7 +621,7 @@
         "syncPolicy": {
           "type": "object",
           "properties": {
-            "maxDelayMs": { "type": "integer", "minimum": 0, "default": 100 },
+            "maxDelayMs": { "type": "integer", "minimum": 0, "default": 1 },
             "timeoutMs": { "type": "integer", "minimum": 1, "default": 5000 },
             "onTimeout": { "type": "string", "enum": ["skip", "abort"], "default": "skip" }
           }

@@ -6,14 +6,18 @@
   "scenes": [
     {
       "name": "Factory",
+      "type": "builtin",
       "durationFrames": 250000
     },
     {
       "name": "Office",
+      "type": "builtin",
       "durationFrames": 150000
     },
     {
-      "name": "Warehouse",
+      "name": "custom:Factory_Custom_A:2024.03",
+      "type": "custom",
+      "assetId": "Factory_Custom_A:2024.03",
       "durationFrames": 100000
     }
   ],
@@ -106,7 +110,7 @@
     },
     "manifest": {
       "enabled": true,
-      "schemaVersion": "1.0.0"
+      "schemaVersion": "manifest-v1.0"
     }
   },
   "pipeline": {

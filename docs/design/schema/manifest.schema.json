@@ -1,0 +1,252 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://forge/docs/schema/manifest.schema.json",
+  "title": "Forge Dataset Manifest",
+  "type": "object",
+  "required": [
+    "version",
+    "sessionInfo",
+    "scenes",
+    "cameras",
+    "statistics",
+    "validation",
+    "output",
+    "performanceSummary"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "pattern": "^manifest-v[0-9]+\\.[0-9]+$",
+      "default": "manifest-v1.0"
+    },
+    "version": {
+      "type": "string",
+      "description": "Forge 엔진 버전"
+    },
+    "sessionInfo": {
+      "$ref": "#/$defs/SessionInfo"
+    },
+    "scenes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/SceneInfo" }
+    },
+    "cameras": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/CameraInfo" }
+    },
+    "statistics": {
+      "$ref": "#/$defs/Statistics"
+    },
+    "validation": {
+      "$ref": "#/$defs/Validation"
+    },
+    "performanceSummary": {
+      "$ref": "#/$defs/PerformanceSummary"
+    },
+    "exportLayout": {
+      "$ref": "#/$defs/ExportLayout"
+    },
+    "output": {
+      "$ref": "#/$defs/OutputInfo"
+    },
+    "reidArtifacts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Artifact" }
+    },
+    "edgeArtifacts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Artifact" }
+    },
+    "sensorArtifacts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/SensorArtifact" }
+    },
+    "sceneAssets": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/SceneAssetReference" }
+    },
+    "distributed": {
+      "$ref": "#/$defs/DistributedInfo"
+    }
+  },
+  "$defs": {
+    "SessionInfo": {
+      "type": "object",
+      "required": ["sessionId", "createdAt", "qualityMode", "totalFrames", "completedFrames"],
+      "properties": {
+        "sessionId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "completedAt": { "type": "string", "format": "date-time" },
+        "qualityMode": { "type": "string", "enum": ["strict", "relaxed"] },
+        "configPath": { "type": "string" },
+        "totalFrames": { "type": "integer", "minimum": 0 },
+        "completedFrames": { "type": "integer", "minimum": 0 },
+        "seed": { "type": "integer" }
+      }
+    },
+    "SceneInfo": {
+      "type": "object",
+      "required": ["name", "type", "durationFrames"],
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["builtin", "custom"] },
+        "assetId": { "type": "string" },
+        "durationFrames": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "CameraInfo": {
+      "type": "object",
+      "required": ["cameraId", "mode", "resolution"],
+      "properties": {
+        "cameraId": { "type": "string" },
+        "mode": { "type": "string", "enum": ["static", "mobile"] },
+        "resolution": {
+          "type": "object",
+          "properties": {
+            "width": { "type": "integer" },
+            "height": { "type": "integer" }
+          },
+          "required": ["width", "height"]
+        },
+        "fov": { "type": "number" },
+        "poseFile": { "type": "string" },
+        "extrinsic": { "type": "array", "items": { "type": "number" }, "minItems": 16, "maxItems": 16 }
+      }
+    },
+    "Statistics": {
+      "type": "object",
+      "required": ["frames", "detections", "persons"],
+      "properties": {
+        "frames": { "type": "integer", "minimum": 0 },
+        "detections": { "type": "integer", "minimum": 0 },
+        "persons": { "type": "integer", "minimum": 0 },
+        "occlusionHistogram": { "$ref": "#/$defs/Histogram" },
+        "bboxScaleHistogram": { "$ref": "#/$defs/Histogram" },
+        "mobileSummary": {
+          "type": "object",
+          "properties": {
+            "totalDistanceM": { "type": "number" },
+            "maxSpeedMps": { "type": "number" },
+            "poseSamples": { "type": "integer" }
+          }
+        }
+      }
+    },
+    "Histogram": {
+      "type": "object",
+      "patternProperties": {
+        "^.*$": { "type": "number" }
+      },
+      "additionalProperties": false
+    },
+    "Validation": {
+      "type": "object",
+      "required": ["isValid"],
+      "properties": {
+        "isValid": { "type": "boolean" },
+        "missingFrames": { "type": "integer", "minimum": 0 },
+        "corruptedImages": { "type": "integer", "minimum": 0 },
+        "invalidLabels": { "type": "integer", "minimum": 0 },
+        "poseMissingCount": { "type": "integer", "minimum": 0 },
+        "sensorDriftWarning": { "type": "boolean" }
+      }
+    },
+    "PerformanceSummary": {
+      "type": "object",
+      "required": ["avgFps", "minFps", "maxFps"],
+      "properties": {
+        "avgFps": { "type": "number", "minimum": 0 },
+        "minFps": { "type": "number", "minimum": 0 },
+        "maxFps": { "type": "number", "minimum": 0 },
+        "stageMaxQueueDepth": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
+        "cpuPeak": { "type": "number", "minimum": 0 },
+        "gpuPeak": { "type": "number", "minimum": 0 },
+        "memoryPeakGb": { "type": "number", "minimum": 0 },
+        "retryCount": { "type": "integer", "minimum": 0 },
+        "dropCount": { "type": "integer", "minimum": 0 },
+        "gapCount": { "type": "integer", "minimum": 0 },
+        "metricsSnapshot": { "type": "string" }
+      }
+    },
+    "ExportLayout": {
+      "type": "object",
+      "properties": {
+        "scheme": { "type": "string", "enum": ["single_root", "session_subdir"] },
+        "pattern": { "type": "string" }
+      }
+    },
+    "OutputInfo": {
+      "type": "object",
+      "required": ["imagesPath", "labelsPath"],
+      "properties": {
+        "imagesPath": { "type": "string" },
+        "labelsPath": { "type": "string" },
+        "reidPath": { "type": "string" },
+        "edgePath": { "type": "string" }
+      }
+    },
+    "Artifact": {
+      "type": "object",
+      "required": ["name", "status"],
+      "properties": {
+        "name": { "type": "string" },
+        "status": { "type": "string", "enum": ["success", "failed", "skipped"] },
+        "path": { "type": "string" },
+        "checksum": { "type": "string" }
+      }
+    },
+    "SensorArtifact": {
+      "type": "object",
+      "required": ["sensor", "status"],
+      "properties": {
+        "sensor": { "type": "string" },
+        "status": { "type": "string", "enum": ["success", "failed", "dropped"] },
+        "path": { "type": "string" },
+        "syncDriftExceeded": { "type": "boolean" }
+      }
+    },
+    "SceneAssetReference": {
+      "type": "object",
+      "required": ["sceneName", "version", "status"],
+      "properties": {
+        "sceneName": { "type": "string" },
+        "version": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "ready", "quarantine"] }
+      }
+    },
+    "DistributedInfo": {
+      "type": "object",
+      "properties": {
+        "workers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["workerId", "frameRange"],
+            "properties": {
+              "workerId": { "type": "string" },
+              "frameRange": {
+                "type": "array",
+                "items": { "type": "integer" },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "globalIdChunk": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 }
+            }
+          }
+        },
+        "replayedRanges": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": { "type": "integer" },
+            "minItems": 2,
+            "maxItems": 2
+          }
+        }
+      }
+    }
+  }
+}

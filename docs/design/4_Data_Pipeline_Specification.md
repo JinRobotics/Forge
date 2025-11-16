@@ -200,6 +200,32 @@ public void Pipeline_LongRunning_NoMemoryLeak()
 합계: ~5.5 GB
 ```
 
+#### 2.0.7 Stage Mutability Matrix (Zero-copy 모드)
+
+Zero-copy 경로에서 `FramePipelineContext`를 사용하는 경우 Stage별로 읽기/쓰기 권한을 다음 표처럼 고정한다. 문서/코드/테스트 모두 동일 규칙을 따른다.
+
+| Stage | Writable Fields | Read-only Fields |
+|-------|-----------------|------------------|
+| FrameBus | `Frame` | - |
+| CaptureWorker | `Images[]` | `Frame` |
+| AnnotationWorker | `Detection` | `Frame`, `Images` |
+| TrackingWorker | `Tracking` | `Frame`, `Images`, `Detection` |
+| OcclusionWorker | `Occlusion` | `Frame`, `Images`, `Detection`, `Tracking` |
+| LabelAssembler | `Label` | 모든 이전 필드 |
+| ReIDExportWorker | `ReIdArtifacts` (내부 리스트) | `Frame`, `Label`, `Tracking` |
+| EncodeWorker | `Encoded` | `Frame`, `Label`, `Images` |
+| StorageWorker | - | 모든 필드 (저장 후 dispose) |
+
+- Stage는 **자신의 Writable 필드만** set/clear할 수 있고, 다른 필드 수정은 금지한다.
+- Stage 실패 시 Writable 필드를 초기화하고 Diagnostics에 “stage=Annotation, field=Detection” 형태로 남겨 원인 추적이 가능하도록 한다.
+
+#### 2.0.8 ReID Export 위치
+
+- ReID Export는 LabelAssembler가 전 카메라 라벨을 join 완료한 이후, EncodeWorker가 이미지 압축을 수행하기 전에 실행한다.
+- 흐름: `LabelAssembler → (optional) ReIDExportWorker → EncodeWorker`
+  - 장점: LabelAssembler가 생성한 정확한 bbox/occlusion 정보를 그대로 사용 가능.
+  - EncodeWorker 이전에 crop을 수행하므로 RawImageData buffer가 아직 메모리에 존재하며 추가 디스크 I/O 없이 crop 가능.
+- ReIDExportWorker는 실패하더라도 LabelAssembler 결과에는 영향을 주지 않으며, `manifest.reidArtifacts[].status=failed`로만 기록한다.
 **최적화 전략**:
 - CaptureWorker 큐 크기 축소 (512 → 128)
 - AsyncGPUReadback 사용하여 GPU → CPU 복사 지연

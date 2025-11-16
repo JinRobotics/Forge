@@ -122,6 +122,22 @@ public record FrameContext
 
 ---
 
+#### 3.1 타임라인 통합기 (Timeline Integrator)
+
+센서별 주파수가 서로 다르기 때문에 `MultiSimSyncCoordinator`는 다음 규칙으로 up/down-sampling을 수행한다.
+
+| 소스 | 업데이트 빈도 | 스케줄링 규칙 |
+|------|---------------|----------------|
+| Unity Frame (RGB) | Config `session.targetFps` (예: 30Hz) | 모든 FrameId의 기준. Isaac 센서 샘플은 가장 가까운 Frame timestamp에 정렬 |
+| Isaac Lidar | 기본 10Hz | Lidar 샘플 1개는 3개의 RGB Frame을 커버. FrameContext는 최근 Lidar 샘플을 참조하고, manifest.sensorArtifacts[].lidar.sampleFrameIds에 참조 FrameId를 기록 |
+| Isaac IMU | 100Hz | Unity Frame당 3~4개의 IMU 샘플이 존재. `imuSamplingPolicy=average/first/last` 옵션으로 FrameContext에 포함할 값을 선택하고 나머지는 센서 CSV에 기록 |
+| Isaac Depth | 30Hz | RGB와 동일 빈도. FrameId 1:1 대응 |
+
+- Coordinator는 `syncPolicy.maxDelayMs`(기본 1ms) 기준으로 허용 지연을 계산하고, 초과 시 strict 모드에서는 세션 실패, relaxed 모드에서는 해당 센서 샘플을 drop 후 manifest.sensorArtifacts[].syncDriftExceeded = true로 기록한다.
+- Clock source는 Unity `Time.time`을 기준으로 Isaac 시뮬레이션 시간을 맞추며, Isaac가 독립 clock을 사용할 경우 `clockOffsetMs`를 실시간 측정해 `/metrics`(`sensor_sync_offset_ms_avg/p99`)에 노출한다.
+
+---
+
 #### FR-43: Config 기반 로봇/센서 정의
 
 **요구사항**:

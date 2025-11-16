@@ -55,7 +55,7 @@
     },
     "manifest": {
       "enabled": true,
-      "schemaVersion": "1.0.0"
+      "schemaVersion": "manifest-v1.0"
     }
   }
 }
