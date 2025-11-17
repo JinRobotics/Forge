@@ -112,3 +112,46 @@ Scene Asset Registry는 UR-02-1 / FR-03-1에서 요구하는 “사용자 정의
 - 업로드는 Role=`admin`/`operator`만 허용, mTLS/API Key 필수.  
 - Worker는 제한 권한 계정으로 실행하며, 검증 실패 파일은 `quarantine/`으로 이동 후 30일 뒤 삭제.  
 - `scene_asset_audit.log`에 업로더, 해시, 상태 전환 기록을 남기고, `/audit/scene-assets` API로 조회 가능.
+
+---
+
+## 7. 배포 & Scene Pool 연동
+
+### 7.1 Unity Addressables / Build 경로
+
+| 스테이지 | 경로 | 설명 |
+|----------|------|------|
+| Source | `assets/custom_scenes/ready/<scene>/<version>/scene.bundle` | Registry에서 제공하는 원본 Bundle |
+| Addressables Staging | `UnityProject/Assets/Addressables/CustomScenes/<scene>/<version>/` | Unity 빌드 시 import 되는 위치 |
+| Build Output | `UnityProject/ServerData/<platform>/CustomScenes/<scene>/<version>/` | Addressables BuildPipeline 결과 |
+| Distribution Cache | `/var/cache/forge/scenes/<scene>/<version>/` | Worker 노드가 다운로드 후 캐시 |
+
+- Nightly 빌드가 모든 `ready` Scene을 Addressables Catalog에 포함시키고, Catalog Hash를 `scene_catalog.json`으로 게시한다.
+
+### 7.2 Cache 정책
+
+- Worker는 `scene_catalog.json`의 hash를 확인해 변경 여부를 판단한다.
+- Cache 만료 조건:
+  - 버전이 다르거나
+  - Catalog hash mismatch
+  - 마지막 사용 후 30일 경과
+- 만료 시 `forge scene cache purge --scene <name> --version <ver>` 커맨드 또는 자동 청소 job이 캐시를 삭제하고 재다운로드한다.
+
+### 7.3 Asset 변경/무효화 흐름
+
+1. 동일 SceneName/Version 재업로드 시 `metadata.versionSuffix`를 자동 증가시켜 충돌을 방지하거나, 기존 버전은 `deprecated` 상태로 이동.
+2. Addressables 빌드가 완료되면 `SceneCatalog.status=ready`로 업데이트하고 Catalog hash가 변경된다.
+3. Worker가 새 Catalog를 감지하면,
+   - 진행 중인 세션: 현재 Scene 전환이 끝난 시점에 hot reload 가능하도록 `EnvironmentCoordinator.RequestSceneReload()` 호출
+   - 대기 중 세션: 세션 시작 시 최신 Scene Pool을 로드
+
+### 7.4 Scene Pool 업데이트 시점
+
+- SessionManager는 세션 시작 전에 `SceneAssetRegistry`에서 최신 `ready` Scene 목록을 가져와 Scene Pool을 구성한다.
+- 장시간 실행 세션(>12h)의 경우 `ScenePoolWatcher`가 30분마다 Catalog를 폴링하고, 새 Scene이 추가되면 다음 Scenario 전환 시 사용할 수 있도록 pre-load 한다.
+- Manifest에는 `sceneAssets[].catalogHash`를 기록해 어떤 Catalog 버전을 사용했는지 추적한다.
+
+### 7.5 장애 대비
+
+- Addressables 빌드 실패 시 Scene 상태를 `build_failed`로 마크하고, `/scene-assets/status` 응답에 실패 사유, 로그 경로, 재시도 가능 시점을 포함한다.
+- Worker 캐시 다운로드 실패 시 exponential backoff를 적용하고, 3회 실패하면 해당 Scene을 `disabled`로 표기하여 세션 구성에서 제외한다.

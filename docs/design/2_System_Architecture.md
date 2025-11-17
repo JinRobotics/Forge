@@ -11,6 +11,8 @@
 
 ## 2. 아키텍처 개요 (Architecture Overview)
 
+> 📘 용어 및 DTO는 `docs/design/common/terminology.md`와 `docs/design/common/datamodel.md`를 기준으로 한다.
+
 시스템은 다음 **4개 레이어**로 구성된다.
 
 1. Application Layer
@@ -661,6 +663,42 @@ sequenceDiagram
 ```
 
 다이어그램처럼 MultiSimSyncCoordinator는 기존 GenerationController-FrameBus 루프 사이에 삽입된다. Back-pressure 신호는 여전히 PipelineCoordinator → GenerationController 경로를 따르지만, Robotics latency가 timeout 임계치를 넘으면 DiagnosticsService(§3.5)가 이벤트를 기록하고 FrameRatePolicy가 `quality_first` 프로파일일 경우에는 Pause 대신 Skip으로 완화하도록 정책을 전환한다.
+
+**Phase 4 구성도**
+
+```mermaid
+graph TB
+    subgraph Orchestration
+        SessionMgr
+        PipeCoord
+        MSC[MultiSimSyncCoordinator]
+    end
+    subgraph Simulation["Unity Simulation Layer"]
+        UnityGW
+        EnvSvc
+        CamSvc
+        CrowdSvc
+    end
+    subgraph Robotics["Isaac / Robotics Backend"]
+        IsaacGW
+        Sensors[Sensor Services]
+    end
+    subgraph Pipeline["Data Pipeline"]
+        FrameBus
+        Capture
+        Annotation
+        Tracking
+        SensorExport
+    end
+    SessionMgr --> MSC
+    MSC --> UnityGW
+    MSC --> IsaacGW
+    UnityGW --> FrameBus
+    IsaacGW --> Sensors
+    FrameBus --> Capture --> Annotation --> Tracking --> SensorExport
+    PipeCoord --> Pipeline
+    MSC -.metrics.-> PipeCoord
+```
 
 ---
 

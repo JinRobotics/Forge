@@ -4,6 +4,8 @@
 본 문서는 Forge의 주요 API 명세를 정의한다.  
 API 계약을 명확히 함으로써 레이어 간 결합도를 낮추고 기능별 병행 개발, 테스트 자동화, 운영 모니터링을 가능하게 한다.
 
+> DTO/필드 정의는 `docs/design/common/terminology.md`와 `docs/design/common/datamodel.md`를 기준으로 한다.
+
 ---
 
 ## 2. API 개요 (API Overview)

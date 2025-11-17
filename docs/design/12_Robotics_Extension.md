@@ -1,6 +1,8 @@
 
 ## 1. 목적 (Purpose)
 
+> 용어/데이터 구조는 `docs/design/common/terminology.md` 및 `docs/design/common/datamodel.md`를 따른다. Robotics에서 확장된 센서 필드도 FrameContext 정의에 포함된다.
+
 **Phase 4의 목표**:
 
 > 기존 Forge가 제공하는 **CCTV + Mobile RGB 중심 합성 데이터 엔진**을 **로봇용 센서 Ground Truth (LiDAR, IMU, Wheel Odometry, Depth, Trajectory/SLAM GT)** 까지 확장해, "Full Robotics Perception Dataset Generator"로 업그레이드한다.
@@ -135,6 +137,16 @@ public record FrameContext
 
 - Coordinator는 `syncPolicy.maxDelayMs`(기본 1ms) 기준으로 허용 지연을 계산하고, 초과 시 strict 모드에서는 세션 실패, relaxed 모드에서는 해당 센서 샘플을 drop 후 manifest.sensorArtifacts[].syncDriftExceeded = true로 기록한다.
 - Clock source는 Unity `Time.time`을 기준으로 Isaac 시뮬레이션 시간을 맞추며, Isaac가 독립 clock을 사용할 경우 `clockOffsetMs`를 실시간 측정해 `/metrics`(`sensor_sync_offset_ms_avg/p99`)에 노출한다.
+
+##### SyncCoordinator 실패 처리 요약
+
+| 상황 | 판단 기준 | 결과 |
+|------|-----------|------|
+| Isaac 응답 지연 | `latency > syncPolicy.maxDelayMs` | Strict: 세션 Fail. Relaxed: 해당 센서 샘플 drop, `sensorArtifacts[].syncDriftExceeded=true` |
+| Isaac 무응답 | `timeoutMs` 초과 | `syncPolicy.onTimeout`에 따라 `skip` 또는 세션 종료. Fallback 시 Unity RGB만 계속 생성 |
+| Unity ↔ Isaac timestamp drift | `|unityTs - isaacTs| > driftThreshold` (기본 1ms) | 경고 로그 + Manifest `sensorDriftWarning=true`. 반복되면 SessionManager가 `Paused` 후 재동기화 시도 |
+
+이 표의 로직은 `MultiSimSyncCoordinator` 구현과 테스트에도 동일하게 적용한다.
 
 ---
 

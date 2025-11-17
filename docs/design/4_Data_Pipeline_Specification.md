@@ -1,6 +1,8 @@
 
 ## 1. 목적 (Purpose)
 
+> 모든 용어/데이터 구조는 `docs/design/common/terminology.md`와 `docs/design/common/datamodel.md`를 따른다.
+
 본 문서는 Forge의 **데이터 파이프라인**을  
 구체적으로 정의한다.
 
@@ -200,7 +202,7 @@ public void Pipeline_LongRunning_NoMemoryLeak()
 합계: ~5.5 GB
 ```
 
-#### 2.0.7 Stage Mutability Matrix (Zero-copy 모드)
+#### 2.0.7 Stage Mutability Matrix (Zero-copy, Phase 2+)
 
 Zero-copy 경로에서 `FramePipelineContext`를 사용하는 경우 Stage별로 읽기/쓰기 권한을 다음 표처럼 고정한다. 문서/코드/테스트 모두 동일 규칙을 따른다.
 
@@ -219,7 +221,26 @@ Zero-copy 경로에서 `FramePipelineContext`를 사용하는 경우 Stage별로
 - Stage는 **자신의 Writable 필드만** set/clear할 수 있고, 다른 필드 수정은 금지한다.
 - Stage 실패 시 Writable 필드를 초기화하고 Diagnostics에 “stage=Annotation, field=Detection” 형태로 남겨 원인 추적이 가능하도록 한다.
 
-#### 2.0.8 ReID Export 위치
+> DTO 상세 정의는 `docs/design/common/datamodel.md`를 참고한다.
+
+#### 2.0.8 Stage 실패 → Session 상태 흐름
+
+Zero-copy 여부와 관계없이 Stage 실패 시 SessionManager와 PipelineCoordinator가 아래 규칙을 따른다.
+
+| 시나리오 | StageStatuses 예시 | SessionManager 조치 | Manifest 기록 |
+|----------|-------------------|---------------------|---------------|
+| Capture 실패 (GPU/IO) | `Capture=Failed`, `ErrorFlags=["ReadPixelsTimeout"]` | 세션 `Paused`, CaptureWorker 재시도 3회. 반복 실패 시 `SessionState=Error`. | `manifest.validation.missingFrames++`, diagnostics에 stage/cause 기록 |
+| Tracking 실패 (데이터 무결성) | `Tracking=Failed`, `ErrorFlags=["InvalidDetectionInput"]` | 해당 frame drop, 세션 계속. PipelineCoordinator가 Backpressure `CAUTION` 발신. | `manifest.statistics.droppedFrames++`, warnings에 `tracking_invalid_detection` |
+| Encode 실패 (디스크 용량) | `Encode=Failed`, `ErrorFlags=["DiskFull"]` | 즉시 `SessionState=Error`, 사용자 알림. | `manifest.validation.diskFull=true`, `performanceSummary.dropCount` 증가 |
+| Storage 실패 (권한) | `Storage=Failed`, `ErrorFlags=["PermissionDenied"]` | 세션 중단, Output 경로 잠금. | `manifest.recoveryActions[]`에 `storage_permission_denied` 추가 |
+
+흐름 요약:
+1. Stage Worker가 예외 발생 시 `StageFailureEvent(stage, frameId, errorCode)`를 PipelineCoordinator에 전송.
+2. PipelineCoordinator는 `FramePipelineContext.StageStatuses`를 업데이트하고 Backpressure 레벨을 재계산한다.
+3. SessionManager는 `qualityMode`와 Stage 중요도에 따라 `Continue / Retry / Pause / Abort` 중 하나를 선택한다.
+4. ManifestService는 세션 종료 시 `diagnostics.stageStatuses[]`와 `stageFailureCounts`를 저장해 사후 분석이 가능하게 한다.
+
+#### 2.0.9 ReID Export 위치
 
 - ReID Export는 LabelAssembler가 전 카메라 라벨을 join 완료한 이후, EncodeWorker가 이미지 압축을 수행하기 전에 실행한다.
 - 흐름: `LabelAssembler → (optional) ReIDExportWorker → EncodeWorker`
@@ -231,53 +252,7 @@ Zero-copy 경로에서 `FramePipelineContext`를 사용하는 경우 Stage별로
 - AsyncGPUReadback 사용하여 GPU → CPU 복사 지연
 - ArrayPool 사용으로 할당 빈도 감소
 
-#### 2.0.7 Stage 간 데이터 구조
-
-각 Stage는 공통 DTO를 사용하여 데이터를 교환한다. DTO는 `src/DataPipeline/DataModel/`에 정의한다.
-
-```csharp
-public readonly struct FrameData {
-    public int FrameId { get; init; }
-    public DateTime Timestamp { get; init; }
-    public byte[] ImageData { get; init; }      // ArrayPool 버퍼
-    public IntPtr? GpuHandle { get; init; }     // Zero-Copy 모드에서만 사용
-    public CameraMetadata Camera { get; init; }
-}
-
-public readonly struct DetectionResult {
-    public int FrameId { get; init; }
-    public BoundingBox[] Boxes { get; init; }
-    public float[] Confidences { get; init; }
-    public AnnotationMetadata Metadata { get; init; }
-}
-
-public readonly struct TrackingResult {
-    public int FrameId { get; init; }
-    public Tracklet[] Tracklets { get; init; }
-    public Pose[] CameraPoses { get; init; }
-}
-
-public readonly struct LabeledFrame {
-    public int FrameId { get; init; }
-    public FrameData Frame { get; init; }
-    public DetectionResult Detection { get; init; }
-    public TrackingResult Tracking { get; init; }
-    public OcclusionData Occlusion { get; init; }
-}
-
-public readonly struct EncodedFrame {
-    public int FrameId { get; init; }
-    public string CameraId { get; init; }
-    public string RelativePath { get; init; }
-    public ReadOnlyMemory<byte> Payload { get; init; }
-}
-```
-
-- 모든 DTO는 불변(immutable)로 유지해 Stage 간 참조/동시성 문제를 방지한다.
-- `CameraMetadata`, `AnnotationMetadata` 등 서브 타입 정의는 Class Design 문서 §5.5를 따른다.
-- 테스트에서는 `tests/fixtures/FrameDataFactory` 헬퍼로 샘플 DTO를 생성해 서로 다른 Stage를 단위 테스트한다.
-
-#### 2.0.8 Backpressure 정책
+#### 2.0.10 Backpressure 정책
 
 Capture→Encode 파이프라인은 고정 큐 크기와 품질 정책에 따라 Backpressure를 처리한다.
 
@@ -371,13 +346,13 @@ THEN Zero-Copy 방식 고려
 ELSE 기본 방식 유지 (단순성 우선)
 ```
 
-**Zero-Copy 제약/에러 보고 (Experimental, 기본 OFF):**
+**Zero-Copy 제약/에러 보고 (Experimental, 기본 OFF · Phase 2+):**
 - Zero-Copy는 실험 옵션이며 기본 비활성화한다.
 - `FramePipelineContext`에 `StageStatuses`(Dictionary<string, StageStatus>)와 `StageErrorFlags`를 추가해 Stage별 완료/실패를 기록한다.
 - 각 Stage는 자신에게 할당된 필드를 **한 번만 set**(idempotent write)하고 이후 read-only로 취급한다.
 - Stage에서 예외/누락 발생 시 `StageStatuses["Tracking"]=Failed` 식으로 플래그를 남기고, Validation/Manifest가 StageStatuses를 집계해 품질 보고에 반영한다.
 
-**별도 흐름 (ReID Export):**
+**별도 흐름 (ReID Export, Phase 2+):**
 - RawImageData + TrackingData → ReID Crop Images (person_id 기반 디렉토리)
 - 이동형 카메라 pose:
   - FrameBus Publish 시 `FrameContext`에 `CameraPoses`(camera_id, extrinsic, position, rotation, timestamp)를 포함한다.
@@ -1091,6 +1066,52 @@ Export 디렉토리 구조:
 성능 목표:
 - Export는 선택적 기능이므로 전체 파이프라인 FPS에 영향 최소화
 - 필요 시 별도 세션으로 분리하여 post-processing으로 실행 가능
+
+#### 4.10.1 Crop 정책
+- 기본 bbox에서 상하 각 10%, 좌우 각 5%를 padding하여 인체를 충분히 포함한다. (`padTop=0.1`, `padBottom=0.1`, `padSides=0.05`)
+- bbox가 이미지 경계를 넘어가면 zero-padding 대신 clamp 후 letterbox padding을 적용한다.
+- 최소 해상도: 32×64. 이보다 작으면 sample drop 후 `manifest.reidArtifacts[].warnings`에 기록.
+- Occlusion ratio가 `occlusion > reid.max_occlusion`(기본 0.8)인 경우 skip하여 노이즈를 줄인다.
+
+#### 4.10.2 Aspect Ratio / Padding
+- ReID 모델 기본 입력 비율은 2:1(Height:Width)로 정의한다. 설정값(`reid.aspectRatio`) 변경 가능.
+- 처리 흐름:
+  1. crop 영역을 원본 비율대로 잘라냄
+  2. 타겟 사이즈(`reid.outputSize`, 기본 256×128)로 resize
+  3. aspect ratio 불일치 시 letterbox padding(검정 또는 평균 색상)으로 채움
+- padding 메타데이터(`pad_top`, `pad_bottom`, `pad_left`, `pad_right`)를 `metadata.csv`에 기록하여 후처리에서 재구성 가능하게 한다.
+
+#### 4.10.3 Multi-camera / Global ID Consistency
+- `global_person_id` 단위로 루트 디렉터리를 생성하고, 각 카메라별 서브 디렉터리를 둔다. 동일 인물이 여러 카메라에 등장해도 하나의 글로벌 폴더를 공유한다.
+- `metadata.csv`에 `cross_camera_group_id`를 추가하여 동일 `global_person_id`가 포함된 카메라 리스트를 기록한다.
+- 동일 프레임에서 여러 카메라 crop이 생성될 경우 `frame_{frameId}_{cameraId}.jpg` 형태로 중복 방지.
+- Manifest에는 `reidArtifacts[].globalPersonId`, `cameraIds[]`, `sampleCount`를 기록하여 consistency 검증이 가능하도록 한다.
+
+#### 4.10.4 Export Batching 및 파이프라인
+- ReIDExportWorker는 `batch_size`(기본 64)만큼 crop 작업을 모아 GPU/CPU에서 일괄 처리한다.
+  - Batch는 동일 카메라/해상도를 기준으로 묶어 resize 성능을 높인다.
+  - `reid.max_batch_latency_ms`(기본 200ms)를 초과하면 현재까지 누적된 job을 즉시 flush한다.
+- Flush 시:
+  1. Batch 내 RawImageData를 순회하며 crop → resize → encode(JPEG/PNG configurable) 수행
+  2. 파일 시스템에 연속 write 후 `metadata.csv` tail에 append
+  3. `ReIDExportResult`에 batch 경로, 샘플 수, 실패 카운트를 기록해 Metrics/Manifest로 전파
+- 실패한 crop은 batch 처리 후 별도 리스트로 반환하여 `metrics.reid.crop_failures_total` 증가.
+
+#### 4.10.5 Config 항목 요약
+```
+"reid": {
+  "enabled": true,
+  "outputSize": [256, 128],
+  "aspectRatio": 2.0,
+  "padding": {"top":0.1,"bottom":0.1,"sides":0.05},
+  "maxOcclusion": 0.8,
+  "sampleInterval": 1,
+  "maxSamplesPerPerson": 0,
+  "batchSize": 64,
+  "maxBatchLatencyMs": 200
+}
+```
+- ConfigSchemaRegistry에 동일 항목을 등록하고, Validation에서 누락/범위 오류 발생 시 사용자를 차단한다.
 
 ---
 
