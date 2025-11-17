@@ -45,3 +45,6 @@ obj.meta
 Build/
 Builds/
 UserSettings/
+
+# Temporarily ignore workflow until PAT has workflow scope
+.github/workflows/docs-validation.yml
