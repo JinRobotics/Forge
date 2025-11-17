@@ -14,6 +14,8 @@ API 계약을 명확히 함으로써 레이어 간 결합도를 낮추고 기능
 | Configuration API              | 사용자/파이프라인이 참조하는 `config.json` 명세                   | CLI, Web UI, 테스트 도구            |
 | Output Data API                | 파이프라인이 내보내는 라벨/메타 데이터 구조                           | 학습 파이프라인, QA, 외부 소비자           |
 
+> API 버전 관리와 Deprecation 절차는 `docs/design/15_API_Versioning_Policy.md`를 따른다. 모든 엔드포인트는 `/api/v{major}/...` 경로와 `X-Api-Version` 헤더를 통해 현재 버전을 명시해야 하며, Breaking Change를 도입하기 전에 RFC 및 테스트 절차를 선행한다.
+
 ---
 
 ## 3. Orchestration ↔ Simulation API

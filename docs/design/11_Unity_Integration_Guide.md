@@ -241,6 +241,49 @@ public async Task<byte[]> CaptureImageAsync()
 
 ---
 
+### 3.5 Unity 패키지 구조
+
+| 경로 | 설명 | 비고 |
+|------|------|------|
+| `Packages/com.forge.simulation/Runtime` | Simulation Layer 런타임 코드 (`CameraService`, `CrowdService`, `TimeWeatherService`) | `asmdef`: `Forge.Simulation.Runtime` |
+| `Packages/com.forge.simulation/Editor` | Validator, SceneAsset 인입 툴, Build 스크립트 | `asmdef`: `Forge.Simulation.Editor`, Editor 전용 의존성만 허용 |
+| `Assets/Scenes/Runtime/` | 기본 Scene, Diagnostics Scene | Addressables로 관리 |
+| `Assets/Forge/Prefabs/` | 카메라 리그, Crowd Agent, Debug UI 프리팹 | Prefab Variant 사용 |
+| `Assets/Forge/ScriptableObjects/` | Randomization preset, Lighting profile | `ISceneMetadataProvider`가 참조 |
+
+**규칙**
+- 모든 런타임 스크립트는 `Runtime` 폴더에 위치시키고 Editor 의존성을 제거한다.
+- 패키지는 UPM으로 배포하며, Orchestration 레이어는 `Packages/manifest.json`를 통해 버전을 고정한다.
+- `Packages/Forge/Runtime/Bridge` 폴더에 `ISimulationGateway` 구현을 두고, HTTP/InProcess 모드를 `#if UNITY_EDITOR` 전처리로 분리하지 않는다(동일 어셈블리 내에서 Strategy 패턴 사용).
+
+---
+
+### 3.6 MonoBehaviour 라이프사이클 ↔ 파이프라인 연동
+
+| MonoBehaviour 훅 | Forge 역할 | 호출 순서 |
+|-----------------|-----------|-----------|
+| `Awake` | Service Locator 초기화, Camera/Crowd Prefab 로드 | EnvironmentService → CameraService → CrowdService |
+| `Start` | SessionConfig ingest, Scene prewarm, FrameBus 연결 | `SimulationBootstrapper` 실행 |
+| `Update` | Crowd 행동 업데이트, FrameContext 작성 | `CrowdSystem.UpdateAgents()` → `FrameContextBuilder.Snapshot()` |
+| `LateUpdate` | 카메라 포즈 적용, CaptureBridge 호출 | `CameraService.ApplyPoses()` → `CaptureBridge.RequestCapture()` |
+| `OnDestroy` | Worker unsubscribe, Buffer 반환 | PipelineCoordinator.Dispose 호출 |
+
+**지침**
+- Orchestration에서 전달된 `FrameTick`은 `Update` 후반부에서 처리하고, Capture는 `LateUpdate`에서 수행해 motion blur/rolling shutter가 반영되도록 한다.
+- Remote 모드에서도 동일 순서를 강제하기 위해 `TimelineIntegrator`가 Unity PlayerLoop를 커스터마이징하고, Isaac/로보틱스가 활성화된 경우에는 해당 순서에 `MultiSimSyncCoordinator`를 삽입한다.
+
+---
+
+### 3.7 Editor/Inspector 확장
+
+- **SessionConfig Inspector**: `ForgeSessionConfigEditor`가 JSON Config를 ScriptableObject로 로드/저장하며 필드별 유효성 검사를 수행한다. Scene View에서 카메라 Gizmo를 시각화하고 Waypoint 편집을 지원한다.
+- **Crowd Debug Window**: `Window ▸ Forge ▸ Crowd Monitor`에서 현재 Agents 수, 행동 상태, Occlusion 비율을 실시간으로 표시한다. 이 값은 `FrameContext.PersonStates`를 그대로 시각화하여 디버깅 시 문서/레이블을 동시에 비교할 수 있다.
+- **Scene Asset Validator**: `Assets ▸ Forge ▸ Validate Scene Asset` 메뉴로 업로드 전 metadata를 미리 점검한다. `docs/design/14_Scene_Asset_Registry.md`의 검증 규칙을 불러와 오프라인에서 동일한 결과를 미리 확인한다.
+
+Editor 확장 코드는 `Packages/com.forge.simulation/Editor`에 위치시키고, 모든 UI는 UIToolkit 기반으로 작성해 Headless 테스트에서도 자동 검증할 수 있도록 한다.
+
+---
+
 ## 4. Remote 모드 (Phase 2)
 
 ### 4.1 개념

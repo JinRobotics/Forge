@@ -424,6 +424,27 @@ jobs:
 
 ---
 
+### 5.3 Documentation & Architecture Compliance
+
+- **목적**: 설계 문서와 실제 코드 구조가 분리되지 않도록 자동 감시
+- **워크플로**: `.github/workflows/docs-validation.yml`
+
+```yaml
+jobs:
+  architecture-compliance:
+    steps:
+      - run: dotnet test --filter TestCategory=ArchitectureCompliance
+      - run: dotnet test --filter TestCategory=DocumentationContract
+      - run: dotnet test --filter TestCategory=ClassDiagramDrift
+```
+
+**규칙**
+- Class Design 문서(`docs/design/3_Class_Design_Document.md`)와 실제 구현이 달라지면 `ClassDiagramDrift` 테스트가 실패하며 PR이 차단된다.
+- 문서 먼저 업데이트 → Architecture/Documentation 테스트 보강 → 코드 수정 순으로 진행해 일관성을 유지한다.
+- 문서만 수정하는 PR도 해당 워크플로를 통과해야 하며, 실패 시 PR 설명에 수정 계획과 ETA를 기재한다.
+
+---
+
 ## 6. 테스트 데이터 관리
 
 ### 6.1 Fixture 관리

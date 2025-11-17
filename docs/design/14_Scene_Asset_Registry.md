@@ -40,6 +40,21 @@ Scene Asset Registry는 UR-02-1 / FR-03-1에서 요구하는 “사용자 정의
 
 ---
 
+### 3.1 Asset Validation Pipeline
+
+| 단계 | 설명 | 실패 처리 |
+|------|------|-----------|
+| 1. Malware Scan | ClamAV 최신 시그니처로 `pending/scene/version` 전체를 검사. 압축 파일은 샌드박스에서 해제 후 재검사. | 즉시 `quarantine/` 이동, `scene_asset_audit.log`에 해시/사유 기록 |
+| 2. Format Validation | Unity Headless 프로세스에서 `AssetDatabase.LoadAssetAtPath`로 파일 로드, 허용 확장자/용량/파일 개수 검증. | 실패 리포트 + `quarantine/` 이동 |
+| 3. Metadata Integrity Check | `metadata.json`을 JSON Schema로 검증하고 좌표계/단위/NavMesh/Lighting 필드를 추출. | HTTP 400 응답과 함께 오류 목록 반환 |
+| 4. Sandbox Test Load | 제한 권한 Worker가 별도 Unity 인스턴스에서 Scene을 Additive 로드, NavMesh/LightProbe/Collider를 추출하고 Pose 테스트 실행. | 실패 시 Diagnostics에 상세 로그 첨부, `quarantine/` 이동 |
+| 5. Approval & Catalog | 모든 단계 통과 시 `ready/` 이동, `SceneMetadataStore.validation.status=ready`로 갱신 후 Config 옵션에 노출. | - |
+
+- 각 단계는 독립 Queue Worker로 실행되며, `/audit/scene-assets` API는 단계별 타임스탬프/결과를 제공한다.
+- Security & Compliance 문서 §4.4의 격리/삭제 정책을 그대로 준수하며, 실패 자산은 30일 후 자동 삭제 cron job(`scene-asset-cleaner`)이 처리한다.
+
+---
+
 ## 4. 메타데이터 스키마
 
 ```json
