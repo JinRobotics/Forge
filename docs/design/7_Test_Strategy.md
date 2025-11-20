@@ -27,6 +27,21 @@
 - **메모리 누수**: 12시간 실행 시 메모리 증가 < 10%
 - **디스크 I/O**: 손상률 < 0.01%
 
+### 2.4 요구사항-테스트 매트릭스
+
+아래 매트릭스는 `docs/design/1_System_Requirements.md`의 FR/NFR이 어떤 테스트 레벨에서 검증되는지 명시한다. 새로운 요구사항이 추가될 경우 본 표를 갱신하여 누락 여부를 빠르게 확인한다.
+
+| 요구사항 | 주요 내용 | 테스트 커버리지 |
+|---------|-----------|----------------|
+| FR-01~FR-08 (Scene/Camera/Crowd) | 멀티 Scene 로딩, 카메라 메타데이터, Crowd 범위 유지 | 단위: `ScenarioManager`, `CameraService`; 통합: Scene 전환/카메라 재설정 플로우 |
+| FR-09~FR-18 (Simulation/Labeling) | 세션 실행 제어, 자동 라벨링, Tracking/Global ID | 단위: `GenerationController`, `AnnotationWorker`, `TrackingWorker`; 통합: Pipeline Flow 테스트 |
+| FR-19~FR-24 (Data Pipeline/Export) | FrameBus, Encode/Storage, Manifest/Export | 단위: `FrameBus`, `EncodeWorker`, Storage; E2E: 기본 세션/Edge Export 시나리오 |
+| NFR-01,02,08 (성능/규모/플랫폼) | FPS·Frame 규모·GPU 요구사항 | 성능 벤치마크 시나리오 1~3, CI 성능 게이트 |
+| NFR-03~NFR-07 (신뢰성/모듈화/Config) | Storage 무결성, Checkpoint, Config 기반 실행 | 통합: Checkpoint/복구 테스트, ConfigSanitizer 단위 테스트 |
+| NFR-09~NFR-16 (보안/접근 제어/Scene Asset) | 프라이버시, 접근제어, 업로드 보안 | 보안 단위/통합 테스트(`SecurityChecks` job), Scene Asset Registry 계약 테스트 |
+
+> 위 표에서 다루지 않는 요구사항이 발견되면 해당 요구사항 번호·테스트 케이스·책임 팀을 추가한다.
+
 ---
 
 ## 3. 테스트 레벨
@@ -166,6 +181,12 @@ public async Task Pipeline_FullFlow_GeneratesValidOutput()
   - waypoint 대비 위치 편차 ≤ 0.15m, 회전 편차 ≤ 3° 검증
   - timestamp 단조 증가 및 샘플링 주기(설정값 ±10%) 확인
   - Validation 리포트에 `poseMissingCount`, `poseDriftWarning` 필드 노출
+- [ ] 분산/Failover 시나리오(`docs/design/13_Distributed_Architecture.md` 연계):
+  - Worker 등록/Heartbeat/Progress/Result API 계약 테스트 (`/workers/*`, `/tasks/*`)
+  - Heartbeat 미수신 3회 시 상태가 `Lost`로 전환되고 Task 재할당 및 `manifest.distributed.replay` 기록 확인
+  - GlobalIdChunk 재할당 시 retiredChunkId가 Manifest/Diagnostics에 반영되는지 검증
+  - Worker Failover 후 새 Master에 `rebind`하는 절차와 queueRatio 기반 Backpressure 신호 확인
+  - Manifest fragment 병합 충돌(중복 frame, timestamp 역전) 테스트 및 `manifest_merge.log` 검증
 
 ### 3.3 End-to-End 테스트 (E2E Tests)
 

@@ -27,16 +27,114 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "docs/concept/1_User_Requirements.md",
+                "file": "docs/design/15_API_Versioning_Policy.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "1_User_Requirements"
+              "title": "15_API_Versioning_Policy"
+            }
+          },
+          {
+            "id": "d79b1e9d67348447",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "docs/design/UIUX/16_UI_UX_Overview_and_Flows.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "16_UI_UX_Overview_and_Flows"
+            }
+          },
+          {
+            "id": "a598f31ea67aa973",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "docs/design/UIUX/17_UI_Information_Architecture.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "17_UI_Information_Architecture"
+            }
+          },
+          {
+            "id": "a25b9276642f41db",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "docs/design/UIUX/18_UI_Screen_Specifications.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "18_UI_Screen_Specifications"
+            }
+          },
+          {
+            "id": "3d0ccba573710316",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "docs/design/UIUX/19_UI_Interaction_and_Component_Guide.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "19_UI_Interaction_and_Component_Guide"
+            }
+          },
+          {
+            "id": "d7b1f9823324251e",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "docs/design/UIUX/19_UI_Interaction_and_Component_Guide.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "19_UI_Interaction_and_Component_Guide"
+            }
+          },
+          {
+            "id": "a20aa677490690d3",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "docs/design/UIUX/20_UI_Scene_Editor_Spec.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "20_UI_Scene_Editor_Spec"
+            }
+          },
+          {
+            "id": "6c0a5681ee2bc1c6",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "docs/design/UIUX/16_UI_UX_Overview_and_Flows.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "16_UI_UX_Overview_and_Flows"
             }
           }
         ],
-        "currentTab": 1
+        "currentTab": 8
       }
     ],
     "direction": "vertical"
@@ -198,15 +296,22 @@
       "bases:새 베이스 생성하기": false
     }
   },
-  "active": "a3a5d0e7cf378231",
+  "active": "6c0a5681ee2bc1c6",
   "lastOpenFiles": [
+    "docs/design/UIUX/18_UI_Screen_Specifications.md",
+    "docs/design/UIUX/19_UI_Interaction_and_Component_Guide.md",
+    "docs/design/UIUX/20_UI_Scene_Editor_Spec.md",
+    "docs/design/UIUX/21_UI_Robotics_Trajectory_Viewer_Spec.md",
+    "docs/design/무제.md",
+    "docs/design/UIUX/16_UI_UX_Overview_and_Flows.md",
+    "docs/design/15_API_Versioning_Policy.md",
+    "docs/design/UIUX",
+    "docs/design/UIUX/17_UI_Information_Architecture.md",
     "docs/concept/1_User_Requirements.md",
-    "무제.md",
     "docs/concept/0_Concept_Document.md",
     "docs/design/common/terminology.md",
     "docs/design/common/datamodel.md",
     "docs/design/2_System_Architecture.md",
-    "docs/design/15_API_Versioning_Policy.md",
     "docs/design/14_Scene_Asset_Registry.md",
     "docs/design/13_Distributed_Architecture.md",
     "docs/design/12_Robotics_Extension.md",
@@ -220,8 +325,6 @@
     "docs/design/7_Test_Strategy.md",
     "docs/design/6_Database_Schema.md",
     "docs/design/3_Class_Design_Document.md",
-    "reference_repo/README.md",
-    "pipeline/README.md",
     "docs/design/schema/manifest.schema.json",
     "docs/design/schema",
     "docs/design/diagrams/sequence.mmd",
@@ -232,11 +335,6 @@
     "docs/design/common",
     "assets/logo.png",
     "assets/banner.png",
-    "assets",
-    "docs/design/0_Repo Structure.md",
-    "docs/design/12_Robotics_Extension.md.tmp.16369.1763200035617",
-    "reference_repo/docs_analysis/overview/00_START_HERE.md",
-    "docs/design/README.md",
-    "README.md"
+    "assets"
   ]
 }

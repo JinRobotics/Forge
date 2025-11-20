@@ -93,7 +93,7 @@ Scene Asset Registry는 UR-02-1 / FR-03-1에서 요구하는 “사용자 정의
 - `assetPaths.bundle`: 실제 AssetBundle 경로 (Sandbox 내).  
 - `validation.status`: `pending`/`ready`/`quarantine`. Manifest에도 동일 값 기록.
 
-정식 JSON Schema는 `docs/design/schema/scene-asset-metadata.schema.json`(추후 추가)에서 관리한다.
+정식 JSON Schema는 `docs/design/schema/scene-asset-metadata.schema.json`에 두도록 계획되어 있으나, 아직 저장소에는 포함되어 있지 않다. 스키마가 추가되기 전까지는 본 섹션의 예시 JSON과 필드 설명을 단일 소스로 사용한다.
 
 ---
 
@@ -109,9 +109,8 @@ Scene Asset Registry는 UR-02-1 / FR-03-1에서 요구하는 “사용자 정의
 
 ## 6. 보안 & 감사
 
-- 업로드는 Role=`admin`/`operator`만 허용, mTLS/API Key 필수.  
-- Worker는 제한 권한 계정으로 실행하며, 검증 실패 파일은 `quarantine/`으로 이동 후 30일 뒤 삭제.  
-- `scene_asset_audit.log`에 업로더, 해시, 상태 전환 기록을 남기고, `/audit/scene-assets` API로 조회 가능.
+Scene Asset 업로드/검증에 대한 보안·격리 정책은 `docs/design/10_Security_and_Compliance.md` §4.4 “Scene Asset 업로드 보안”에 통합 관리한다.  
+본 문서에서는 해당 절을 단일 소스로 사용하며, 주요 원칙(역할 기반 접근제어, mTLS/API Key, 검증 실패 시 `quarantine/` 보관, `scene_asset_audit.log` 기록, 30일 후 자동 삭제)은 Security 문서를 참조한다.
 
 ---
 
