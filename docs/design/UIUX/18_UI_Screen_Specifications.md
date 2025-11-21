@@ -101,13 +101,17 @@ Forge UI의 모든 화면에 대해 **세부 구조, 표시 요소, 데이터 �
 
 - SessionConfig 필드 입력
     
-    - sessionId
+    - sessionId (Validation: `^[a-z0-9_-]+$`)
         
     - totalFrames
         
     - qualityMode (strict/relaxed)
         
     - frameRatePolicy.id
+        
+    - **Validation Feedback**:
+        - 입력 즉시 JSON Schema 기반 유효성 검사 수행
+        - 오류 발생 필드에 붉은 테두리 및 툴팁으로 상세 원인 표시 (예: "최소 1000 프레임 이상이어야 합니다")
         
 - Scene 선택
     

@@ -103,6 +103,17 @@ Scene Editor는 다음 데이터를 기반으로 작동한다:
 - asset validation 상태 표시
     
 
+## 3.6 Waypoint Editor (Phase 4 Robotics)
+
+- **Mobile Camera(Robot) 경로 설정**
+    - Floorplan 상에서 클릭으로 Waypoint 추가
+    - Waypoint 간 경로(Path) 라인 시각화
+    - 각 Point의 `waitSeconds`, `speed` 속성 편집
+    - Loop 여부 토글
+- **Trajectory Preview**
+    - 설정된 경로의 예상 궤적 미리보기 (Interpolation 적용)
+    
+
 ---
 
 # 4. 화면 구조 (Wireframe)

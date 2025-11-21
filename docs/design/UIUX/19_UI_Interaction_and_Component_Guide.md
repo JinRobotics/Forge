@@ -199,6 +199,30 @@ Trajectory Viewer UI의 핵심 상호작용.
 - density slider 적용
     
 
+- density slider 적용
+    
+
+### Waypoint (Phase 4)
+
+- **Click**: 새로운 Waypoint 추가
+- **Drag**: 기존 Waypoint 위치 이동
+- **Right-Click**: Waypoint 삭제 컨텍스트 메뉴
+- **Path Click**: 경로 사이에 새로운 Point 삽입
+
+---
+
+## 3.4 Validation Feedback
+
+### Input Field Validation
+
+- **Trigger**: `onBlur` 또는 입력 멈춤(debounce 500ms) 후 즉시 검사
+- **Error State**:
+    - Border: Red (#FF0000)
+    - Icon: 우측 느낌표 아이콘 표시
+    - Tooltip: 아이콘 호버 시 구체적인 에러 메시지(JSON Schema 에러) 표시
+- **Success State**:
+    - Border: Green (#00FF00) 또는 기본 상태 복귀
+
 지속적인 편집 작업은 Config diff로 관리될 수 있게 UI 내부적으로 변경사항 트래킹을 유지한다.
 
 ---

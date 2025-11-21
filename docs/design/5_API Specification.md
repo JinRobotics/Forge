@@ -87,6 +87,7 @@ Config에서 `simulation.gateway.mode=remote` 혹은 `distributed`를 설정하�
 | `POST /scenario/activate` | 런타임 Scene/환경 전환 (Phase 2+) | `sceneName`, `timeWeather`, `randomization` | `{status:"success"}`      | Scene 전환 완료 후 응답, 버전 체크 포함  |
 | `GET /status`             | 실행 상태 확인                   | 쿼리 없음                                       | `{status:"running", ...}` | 모니터링/Progress UI, 인증 옵션 선택    |
 | `GET /session/{id}/stream` | 실시간 진행률 SSE (Phase 2+)     | `id` (sessionId)                               | `text/event-stream`       | 1초 간격 progress/FPS/event push       |
+| `GET /session/{id}/cameras/{cameraId}/latest` | 최신 프레임 이미지 조회 (Live Preview) | `id`, `cameraId`, `width`(opt) | `image/jpeg` | UI 모니터링용, 썸네일 리사이징 지원 |
 
 #### `POST /session/init`
 
@@ -203,6 +204,7 @@ CLI/SDK 구성 시:
   ```
   event: progress
   data: {"timestamp":"2025-03-01T10:00:00Z","frame":45210,"fps":18.4,"queueDepth":{"capture":0.3,"encode":0.6}}
+  // queueDepth는 /status와 달리 워커별 상세 수치를 포함한다.
 
   event: warning
   data: {"code":"QUEUE_BACKPRESSURE","level":"warn","message":"Capture queue 95%"}
@@ -215,6 +217,18 @@ CLI/SDK 구성 시:
 - `Last-Event-ID`를 지원해 재연결 시 손실 최소화
 - 세션 종료 시 `event: completed` 전송 후 스트림 종료
 - 인증 실패/세션 없음: 즉시 401/404 후 종료
+
+#### `GET /session/{id}/cameras/{cameraId}/latest`
+
+- **Purpose**: UI의 Live Preview 탭에서 특정 카메라의 가장 최근 생성된 프레임을 조회한다.
+- **Parameters**:
+  - `width` (query, optional): 요청 폭(px). 지정 시 비율 유지하며 리사이징. (예: `?width=320`). 대역폭 절약을 위해 UI에서는 썸네일 요청 권장.
+- **Response 200**:
+  - `Content-Type`: `image/jpeg`
+  - Body: Binary image data
+- **Response 404**: 세션이 없거나 해당 카메라 ID가 없음.
+- **Response 503**: 세션이 실행 중이 아니거나 이미지가 아직 생성되지 않음.
+- **Note**: Orchestration Layer는 최신 프레임 1장만 메모리에 캐싱하며, 이전 프레임은 조회할 수 없다.
 
 ### 3.4 Rate Limiting & Throttling
 
