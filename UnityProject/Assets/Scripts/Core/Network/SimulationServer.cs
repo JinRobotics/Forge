@@ -1,5 +1,6 @@
 using System;
 using System.Net;
+using System.IO;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -12,8 +13,8 @@ namespace Forge.Core.Network
     {
         [SerializeField] private int _port = 8080;
         private HttpListener _listener;
-        private Thread _listenerThread;
-        private bool _isRunning = false;
+        private CancellationTokenSource _cts;
+        private Task _listenTask;
 
         private void Start()
         {
@@ -32,11 +33,10 @@ namespace Forge.Core.Network
                 _listener = new HttpListener();
                 _listener.Prefixes.Add($"http://localhost:{_port}/");
                 _listener.Start();
-                _isRunning = true;
-                
-                _listenerThread = new Thread(ListenLoop);
-                _listenerThread.Start();
-                
+
+                _cts = new CancellationTokenSource();
+                _listenTask = Task.Run(() => ListenLoopAsync(_cts.Token));
+
                 Debug.Log($"[SimulationServer] Listening on port {_port}");
             }
             catch (Exception e)
@@ -47,30 +47,34 @@ namespace Forge.Core.Network
 
         private void StopServer()
         {
-            _isRunning = false;
-            if (_listener != null)
+            try
             {
-                _listener.Stop();
-                _listener.Close();
+                _cts?.Cancel();
+                _listener?.Stop();
+                _listener?.Close();
+                _listenTask?.Wait(500);
             }
-            if (_listenerThread != null)
+            catch (Exception e)
             {
-                _listenerThread.Abort(); // Not ideal, but simple for Phase 1
+                Debug.LogWarning($"[SimulationServer] StopServer warning: {e.Message}");
             }
         }
 
-        private void ListenLoop()
+        private async Task ListenLoopAsync(CancellationToken token)
         {
-            while (_isRunning && _listener.IsListening)
+            while (_listener != null && _listener.IsListening && !token.IsCancellationRequested)
             {
                 try
                 {
-                    var context = _listener.GetContext();
-                    ProcessRequest(context);
+                    var context = await _listener.GetContextAsync();
+                    _ = Task.Run(() => ProcessRequest(context), token);
+                }
+                catch (ObjectDisposedException)
+                {
+                    break;
                 }
                 catch (HttpListenerException)
                 {
-                    // Listener closed
                     break;
                 }
                 catch (Exception e)
@@ -88,32 +92,42 @@ namespace Forge.Core.Network
             string responseString = "{}";
             int statusCode = 200;
 
-            if (request.Url.AbsolutePath == "/status")
+            try
             {
-                // Get status from SessionManager and ForgeScenario
-                var manager = SessionManager.Instance;
-                var scenario = ForgeScenario.Instance;
-                
-                // Get current iteration (exposed via public property in ForgeScenario)
-                int currentFrame = scenario != null ? scenario.CurrentIteration : 0;
-                int totalFrames = scenario != null ? scenario.constants.iterationCount : 1;
-                
-                var status = new
+                switch (request.Url.AbsolutePath)
                 {
-                    isRunning = manager != null && manager.IsSessionRunning,
-                    sessionId = manager?.CurrentConfig?.sessionId ?? "none",
-                    fps = 1.0f / Time.smoothDeltaTime,
-                    progress = (float)currentFrame / totalFrames,
-                    currentFrame = currentFrame,
-                    totalFrames = totalFrames
-                };
-                responseString = JsonUtility.ToJson(status);
-                response.ContentType = "application/json";
+                    case "/session/init":
+                        if (request.HttpMethod != "POST") { statusCode = 405; break; }
+                        using (var reader = new System.IO.StreamReader(request.InputStream, request.ContentEncoding))
+                        {
+                            var body = reader.ReadToEnd();
+                            SessionManager.Instance?.LoadConfig(body);
+                            responseString = "{\"ok\":true}";
+                        }
+                        break;
+                    case "/session/start":
+                        SessionManager.Instance?.StartSession();
+                        responseString = "{\"ok\":true}";
+                        break;
+                    case "/session/stop":
+                        SessionManager.Instance?.StopSession();
+                        responseString = "{\"ok\":true}";
+                        break;
+                    case "/status":
+                        BuildStatus(out responseString);
+                        response.ContentType = "application/json";
+                        break;
+                    default:
+                        statusCode = 404;
+                        responseString = "Not Found";
+                        break;
+                }
             }
-            else
+            catch (Exception e)
             {
-                statusCode = 404;
-                responseString = "Not Found";
+                statusCode = 500;
+                responseString = JsonUtility.ToJson(new { error = e.Message });
+                Debug.LogError($"[SimulationServer] Request error: {e.Message}");
             }
 
             byte[] buffer = Encoding.UTF8.GetBytes(responseString);
@@ -121,6 +135,29 @@ namespace Forge.Core.Network
             response.ContentLength64 = buffer.Length;
             response.OutputStream.Write(buffer, 0, buffer.Length);
             response.OutputStream.Close();
+        }
+
+        private void BuildStatus(out string json)
+        {
+            var manager = SessionManager.Instance;
+            var scenario = ForgeScenario.Instance;
+
+            int currentFrame = scenario != null ? scenario.CurrentIteration : 0;
+            int totalFrames = scenario != null ? scenario.TotalIterations : Math.Max(manager?.CurrentConfig?.totalFrames ?? 1, 1);
+
+            var status = new
+            {
+                isRunning = manager != null && manager.IsSessionRunning,
+                sessionId = manager?.CurrentConfig?.sessionId ?? "none",
+                fps = Time.smoothDeltaTime > 0 ? 1.0f / Time.smoothDeltaTime : 0f,
+                progress = totalFrames > 0 ? (float)currentFrame / totalFrames : 0f,
+                currentFrame = currentFrame,
+                totalFrames = totalFrames,
+                simulationTick = scenario?.CurrentIteration ?? 0,
+                backpressure = 0f // placeholder for Phase 1
+            };
+
+            json = JsonUtility.ToJson(status);
         }
     }
 }

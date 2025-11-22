@@ -56,6 +56,11 @@ namespace Forge.Core.Session
                 return;
             }
 
+            if (CurrentConfig.targetFps > 0)
+            {
+                Application.targetFrameRate = CurrentConfig.targetFps;
+            }
+
             IsSessionRunning = true;
             Debug.Log($"[SessionManager] Session {CurrentConfig.sessionId} STARTED.");
             

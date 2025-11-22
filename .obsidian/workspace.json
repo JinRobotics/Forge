@@ -97,12 +97,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "docs/design/UIUX/17_UI_Scene_Editor_Spec.md",
+                "file": "docs/plan/phase1.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "17_UI_Scene_Editor_Spec"
+              "title": "phase1"
             }
           }
         ],
@@ -268,8 +268,16 @@
       "bases:Create new base": false
     }
   },
-  "active": "a3a5d0e7cf378231",
+  "active": "d7b1f9823324251e",
   "lastOpenFiles": [
+    "docs/design/UIUX/17_UI_Scene_Editor_Spec.md",
+    "docs/plan/phase4.md",
+    "docs/plan/phase3.md",
+    "docs/plan/phase2.md",
+    "docs/plan/phase1.md",
+    "docs/plan/phase_plan.md",
+    "docs/INDEX.md",
+    "docs/plan",
     "Forge.Server/package.json",
     "PHASE1_ISSUES.md",
     "UnityProject/Packages/manifest.json",
@@ -283,9 +291,7 @@
     "UnityProject/Assets/Samples/Background Textures/Pear/Conference/Conference_045.jpg",
     "UnityProject/Assets/Samples/Background Textures/Pear/Conference/Conference_044.jpg.meta",
     "UnityProject/Assets/Samples/Background Textures/Pear/Conference/Conference_044.jpg",
-    "UnityProject/Assets/Samples/Background Textures/Pear/Conference/Conference_043.jpg.meta",
     "UnityProject/Assets/Samples/Background Textures/Pear/Conference/Conference_043.jpg",
-    "UnityProject/Assets/Samples/Background Textures/Pear/Conference/Conference_042.jpg.meta",
     "UnityProject/Assets/Samples/Background Textures/Pear/Conference/Conference_042.jpg",
     "UnityProject/Assets/Samples/Background Textures/Pear/Conference/Conference_041.jpg",
     "UnityProject/Assets/Samples/Background Textures/Pear/Conference/Conference_040.jpg",
@@ -309,12 +315,6 @@
     "UnityProject/Packages/com.unity.perception/Documentation~/HumanPose/TUTORIAL.md",
     "UnityProject/Packages/com.unity.perception/Documentation~/Randomization/index.md",
     "UnityProject/Packages/com.unity.perception/Documentation~/Randomization/Scenarios.md",
-    "UnityProject/Packages/com.unity.perception/Documentation~/Randomization/Samplers.md",
-    "UnityProject/Packages/com.unity.perception/Documentation~/Randomization/Randomizers.md",
-    "UnityProject/Packages/com.unity.perception/Documentation~/Randomization/RandomizerTags.md",
-    "UnityProject/Packages/com.unity.perception/Documentation~/Randomization/RandomizerLibrary.md",
-    "UnityProject/Packages/com.unity.perception/Documentation~/Randomization/Parameters.md",
-    "UnityProject/Packages/com.unity.perception/Documentation~/Randomization/Index.md",
-    "UnityProject/Packages/com.unity.perception/Documentation~/Features/index.md"
+    "UnityProject/Packages/com.unity.perception/Documentation~/Randomization/Samplers.md"
   ]
 }

@@ -11,6 +11,7 @@ namespace Forge.Core
         
         // Expose currentIteration for monitoring (it's protected in base class)
         public int CurrentIteration => currentIteration;
+        public int TotalIterations => constants.iterationCount;
 
         protected override void Awake()
         {

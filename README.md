@@ -4,11 +4,11 @@ Forge는 **Unity Perception** 기반의 합성 데이터 생성 엔진입니다.
 로봇 공학 및 컴퓨터 비전 모델 학습을 위한 고품질의 라벨링된 데이터셋(SOLO, COCO 등)을 자동으로 생성합니다.
 
 ## 🚀 현재 상태 (Current Status)
-**Phase 1 완료 (2025.11)**
-- **Core Engine**: Unity Perception 패키지 통합 완료.
-- **Authoring**: `SceneEditorWindow`를 통한 카메라 및 Randomizer 설정.
-- **Web Dashboard**: 실시간 시뮬레이션 상태 모니터링 (Node.js + Unity HTTP).
-- **Data Pipeline**: SOLO 포맷의 데이터셋 자동 생성.
+**Phase 1 진행 중**
+- **Core Engine**: Unity Perception 기반 시나리오/랜덤라이저 구성
+- **Authoring**: `SceneEditorWindow`에서 카메라 생성·Config export
+- **Web Dashboard**: Node.js 정적 페이지 + Unity `/api/status` 폴링
+- **SimulationServer**: `/session/init`, `/session/start`, `/session/stop`, `/status` 최소 API 제공
 
 ---
 
