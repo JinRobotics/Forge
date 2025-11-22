@@ -96,6 +96,22 @@ Robotics Trajectory Viewer는 다음을 목표로 한다:
 - sensorQuality breakdown
     
 
+## 3.5 데이터 업데이트/주기
+
+|UI 영역|필드/출처|업데이트 주기|비고|
+|---|---|---|---|
+|Trajectory overlay|FrameContext.sensors.robotPose|scrub 시, 자동 모드 3~5초|큰 데이터셋은 샘플링(0.5s step)|
+|Scrubber|frameId/timestamp|사용자 입력|범위 밖 이동 차단|
+|Sensor graphs(position/yaw/velocity)|robotPose|3~5초|줌 영역 유지|
+|Drift graph|SensorQuality.sync_offset_ms|3~5초|임계 초과 시 강조|
+
+## 3.6 경고/하이라이트 규칙
+
+- Drift 임계값: |sync_offset_ms| ≥ 5ms → 붉은 마커 + Tooltip("Drift exceeded 5ms")
+- Invalid pose: SensorQuality.isValid=false → 아이콘 경고, Scrubber 해당 구간 붉은 배경
+- 데이터 누락: frame 간 갭이 기준(>2x 평균 간격)일 경우 점선으로 표시
+- 로딩 실패: floorplan/graph 영역에 안내 텍스트와 재시도 버튼 노출
+
 ---
 
 # 4. 화면 구조 (Wireframe)

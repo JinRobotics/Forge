@@ -19,6 +19,7 @@
 2. Orchestration Layer
 3. Simulation Layer
 4. Data Pipeline Layer (+ QA/Export)
+5. (Phase 4) Multi-Sim Sync
 
 각 레이어는 **Config 기반**으로 느슨하게 결합되며,
 Unity 메인 스레드 제약을 고려하여 Simulation과 Pipeline의 경계를 명확히 한다.
@@ -855,6 +856,12 @@ graph TB
   - `manifest.json` 생성 (SessionConfig, Stats, Validation 결과 포함)
 
 ### 3.5 Cross-cutting Services (Config / Metrics / Diagnostics)
+
+### 3.6 Multi-Sim Sync (Phase 4)
+
+- `MultiSimSyncCoordinator`가 Unity/Isaac Sim 동기화를 담당
+- FrameContext에 `simulationTick`(정수 tick)과 `timestamp`를 함께 유지해 lock-step 동기화
+- 타임스텝/드리프트 한계/재동기화 정책은 manifest/metricsSummary에 기록
 
 레이어별 책임을 유지하면서 **Config 일관성·관측성·운영 진단**을 공통 모듈로 통합한다.
 
