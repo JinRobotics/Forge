@@ -83,8 +83,11 @@
         statusEl.className = 'status ' + (d.isRunning ? 'ok' : '');
         setText('engine-fps', (d.fps || 0).toFixed(2));
         setText('engine-frame', `${d.currentFrame ?? 0} / ${d.totalFrames ?? 0}`);
-        setText('engine-bp', d.backpressure?.toFixed ? d.backpressure.toFixed(2) : '—');
-        setText('engine-warn', Array.isArray(d.warnings) ? d.warnings.length : '0');
+        setText('engine-bp', d.queueDepthSummary?.toFixed ? d.queueDepthSummary.toFixed(2) : (d.backpressure?.toFixed ? d.backpressure.toFixed(2) : '—'));
+        setText('engine-warn', Array.isArray(d.warnings) && d.warnings.length ? d.warnings.join(', ') : '0');
+        if (d.captureTimeMs !== undefined) {
+          setText('engine-fps', d.captureTimeMs > 0 ? (1000 / d.captureTimeMs).toFixed(2) : (d.fps || 0).toFixed(2));
+        }
         setText('engine-quality', d.qualityMode || '—');
         setText('engine-frp', d.frameRatePolicy || '—');
         setText('sess-id', d.sessionId || '—');

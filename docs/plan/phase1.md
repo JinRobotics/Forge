@@ -12,11 +12,11 @@
 - 검증: 최소 100k 프레임 실행(OOM 없이), `/status` 값 변화 확인
 
 ## 해야 할 일
-1) SessionConfig 확장 및 JSON 검증 추가
+1) SessionConfig 확장 및 JSON 스키마 검증 추가(필수 필드/타입/범위, 실패 시 400)
 2) SceneManager/Camera 초기화 연결(PerceptionCamera 생성/설정)
-3) Capture/Annotation/Encode/Storage 스텁 구현
-4) Backpressure 계산(큐 길이 기반) 및 `/status` 반영
-5) 대시보드에서 `/api/status` 필드 모두 표시, 실패 시 경고
+3) Capture/Annotation/Encode/Storage 스텁을 실제 캡처(JPG)/파일 저장으로 교체
+4) Backpressure 계산(큐 길이/처리시간) 및 warnings 배열 `/status` 반영
+5) 대시보드(`/Forge.Server/public/index.html`)에서 warnings/queueDepthSummary/진행률 표시, 실패 시 경고 배너, sessions 테이블(목록 API 연동)
 6) smoke 테스트: Unity 플레이 → curl init/start → 이미지/라벨 저장 확인
 
 ## 완료 기준

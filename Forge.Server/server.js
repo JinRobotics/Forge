@@ -13,6 +13,13 @@ const server = http.createServer((req, res) => {
     
     // API Proxy to Unity
     if (parsedUrl.pathname.startsWith('/api/')) {
+        // 세션 목록 더미 응답 (Unity 측에 없으므로 임시)
+        if (parsedUrl.pathname === '/api/sessions') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ sessions: [] }));
+            return;
+        }
+
         const unityPath = parsedUrl.pathname.replace('/api', '');
         const options = {
             hostname: 'localhost',

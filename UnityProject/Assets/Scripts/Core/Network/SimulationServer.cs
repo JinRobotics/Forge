@@ -101,8 +101,16 @@ namespace Forge.Core.Network
                         using (var reader = new StreamReader(request.InputStream, request.ContentEncoding))
                         {
                             var body = reader.ReadToEnd();
-                            SessionManager.Instance?.LoadConfig(body);
-                            responseString = "{\"ok\":true}";
+                            try
+                            {
+                                SessionManager.Instance?.LoadConfig(body);
+                                responseString = "{\"ok\":true}";
+                            }
+                            catch (Exception ex)
+                            {
+                                statusCode = 400;
+                                responseString = JsonUtility.ToJson(new { error = ex.Message });
+                            }
                         }
                         break;
                     case "/session/start":
@@ -146,6 +154,7 @@ namespace Forge.Core.Network
 
             int currentFrame = frameGen != null ? frameGen.CurrentFrame : (scenario != null ? scenario.CurrentIteration : 0);
             int totalFrames = scenario != null ? scenario.TotalIterations : Math.Max(manager?.CurrentConfig?.totalFrames ?? 1, 1);
+            var warnings = frameGen != null ? frameGen.Warnings : new string[0];
 
             var status = new
             {
@@ -156,9 +165,12 @@ namespace Forge.Core.Network
                 currentFrame = currentFrame,
                 totalFrames = totalFrames,
                 simulationTick = scenario?.CurrentIteration ?? 0,
-                backpressure = 0f, // placeholder for Phase 1
+                backpressure = frameGen != null ? frameGen.Backpressure : 0f,
+                queueDepthSummary = frameGen != null ? frameGen.QueueDepthSummary : 0f,
+                captureTimeMs = frameGen != null ? frameGen.CaptureTimeMs : 0f,
                 qualityMode = manager?.CurrentConfig?.qualityMode ?? "strict",
-                frameRatePolicy = manager?.CurrentConfig?.frameRatePolicy ?? "quality_first"
+                frameRatePolicy = manager?.CurrentConfig?.frameRatePolicy ?? "quality_first",
+                warnings = warnings
             };
 
             json = JsonUtility.ToJson(status);

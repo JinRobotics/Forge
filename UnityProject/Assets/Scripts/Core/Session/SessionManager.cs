@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using Forge.Core.Pipeline;
 using UnityEngine.SceneManagement;
+using System.IO;
 
 namespace Forge.Core.Session
 {
@@ -47,13 +48,7 @@ namespace Forge.Core.Session
             {
                 CurrentConfig = JsonUtility.FromJson<SessionConfig>(jsonConfig);
 
-                // 필수 필드 검증
-                if (string.IsNullOrEmpty(CurrentConfig.sessionId))
-                    throw new Exception("sessionId is required");
-                if (CurrentConfig.totalFrames <= 0)
-                    throw new Exception("totalFrames must be > 0");
-                if (CurrentConfig.cameras == null || CurrentConfig.cameras.Count == 0)
-                    throw new Exception("at least one camera is required");
+                SessionConfigValidator.Validate(CurrentConfig);
 
                 Debug.Log($"[SessionManager] Loaded config for session: {CurrentConfig.sessionId}");
             }
@@ -141,16 +136,32 @@ namespace Forge.Core.Session
 
             if (CurrentConfig.cameras != null)
             {
-                foreach (var camCfg in CurrentConfig.cameras)
-                {
-                    var go = new GameObject($"AutoCam_{camCfg.id}");
-                    var cam = go.AddComponent<Camera>();
-                    cam.transform.position = camCfg.position;
-                    cam.transform.rotation = Quaternion.Euler(camCfg.rotation);
-                    cam.fieldOfView = camCfg.fov;
-                    cam.tag = "MainCamera";
+                SetupPerceptionCameras(CurrentConfig.cameras);
+            }
+        }
 
-                    // 해상도 설정은 Perception/렌더 타겟 연동 시 추가 구현 필요
+        private void SetupPerceptionCameras(List<CameraConfig> cameras)
+        {
+            foreach (var camCfg in cameras)
+            {
+                var go = new GameObject($"AutoCam_{camCfg.id}");
+                var cam = go.AddComponent<Camera>();
+                cam.transform.position = camCfg.position;
+                cam.transform.rotation = Quaternion.Euler(camCfg.rotation);
+                cam.fieldOfView = camCfg.fov;
+                cam.tag = "MainCamera";
+
+                // PerceptionCamera 부착 (필요 패키지 존재 시)
+                var perceptionType = Type.GetType("UnityEngine.Perception.GroundTruth.PerceptionCamera, Unity.Perception");
+                if (perceptionType != null)
+                {
+                    go.AddComponent(perceptionType);
+                }
+
+                // 해상도 설정 (렌더 타겟 기준)
+                if (cam.targetTexture == null && camCfg.width > 0 && camCfg.height > 0)
+                {
+                    cam.targetTexture = new RenderTexture(camCfg.width, camCfg.height, 24);
                 }
             }
         }
