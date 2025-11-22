@@ -13,9 +13,9 @@ namespace Forge.Core
         public int CurrentIteration => currentIteration;
         public int TotalIterations => constants.iterationCount;
 
-        protected override void Awake()
+        protected override void OnAwake()
         {
-            base.Awake();
+            base.OnAwake();
             Instance = this;
         }
 

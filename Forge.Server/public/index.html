@@ -22,10 +22,12 @@
     .badge { padding:4px 8px; border-radius:4px; font-size:11px; font-weight:600; }
     .badge.running { background:rgba(29,170,62,0.15); color:#1daa3e; }
     .badge.completed { background:rgba(43,103,246,0.15); color:#2b67f6; }
+    .badge.paused { background:rgba(245,165,36,0.15); color:#f5a524; }
     .progress { display:flex; align-items:center; gap:8px; }
     .bar { height:6px; background:#2e323b; border-radius:3px; width:120px; overflow:hidden; }
     .fill { height:100%; background:#2b67f6; width:0%; }
     .banner { background:rgba(230,57,70,0.12); color:#e63946; padding:8px 12px; border-radius:4px; font-size:12px; display:none; }
+    .warn-list { margin-top:8px; font-size:12px; color:#f5a524; }
   </style>
 </head>
 <body>
@@ -44,6 +46,7 @@
         <div class="metric-row"><span>Warnings</span><span id="engine-warn">—</span></div>
         <div class="metric-row"><span>Quality</span><span id="engine-quality">—</span></div>
         <div class="metric-row"><span>FR Policy</span><span id="engine-frp">—</span></div>
+        <div id="warn-list" class="warn-list"></div>
       </div>
       <div class="card">
         <h4>현재 세션</h4>
@@ -84,7 +87,8 @@
         setText('engine-fps', (d.fps || 0).toFixed(2));
         setText('engine-frame', `${d.currentFrame ?? 0} / ${d.totalFrames ?? 0}`);
         setText('engine-bp', d.queueDepthSummary?.toFixed ? d.queueDepthSummary.toFixed(2) : (d.backpressure?.toFixed ? d.backpressure.toFixed(2) : '—'));
-        setText('engine-warn', Array.isArray(d.warnings) && d.warnings.length ? d.warnings.join(', ') : '0');
+        setText('engine-warn', Array.isArray(d.warnings) && d.warnings.length ? d.warnings.length : '0');
+        renderWarnings(d.warnings || []);
         if (d.captureTimeMs !== undefined) {
           setText('engine-fps', d.captureTimeMs > 0 ? (1000 / d.captureTimeMs).toFixed(2) : (d.fps || 0).toFixed(2));
         }
@@ -94,7 +98,6 @@
         const prog = Math.min(100, Math.max(0, Math.round((d.progress || 0) * 100)));
         setText('sess-progress', prog + '%');
         renderSessions(d.sessions || []);
-        fetchSessions();
       } catch (e) {
         banner.style.display = 'block';
         setText('engine-status', '오프라인');
@@ -103,15 +106,20 @@
       }
     }
 
-    async function fetchSessions() {
-      try {
-        const res = await fetch('/api/sessions');
-        if (!res.ok) throw new Error();
-        const data = await res.json();
-        renderSessions(data.sessions || []);
-      } catch (e) {
-        // fallback: keep previous table
+    function renderWarnings(list) {
+      const warnEl = document.getElementById('warn-list');
+      if (!warnEl) return;
+      if (!list || !list.length) {
+        warnEl.innerHTML = '<div style="color:#666;">경고 없음</div>';
+        return;
       }
+      warnEl.innerHTML = '';
+      list.forEach(w => {
+        const div = document.createElement('div');
+        div.textContent = w;
+        div.style.color = '#F5A524';
+        warnEl.appendChild(div);
+      });
     }
 
     function renderSessions(list) {

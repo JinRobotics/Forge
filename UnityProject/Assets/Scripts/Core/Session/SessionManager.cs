@@ -36,11 +36,19 @@ namespace Forge.Core.Session
         public SessionConfig CurrentConfig { get; private set; }
         public bool IsSessionRunning { get; private set; }
         private readonly List<SessionSnapshot> _sessions = new List<SessionSnapshot>();
+        private readonly Dictionary<string, SessionSnapshot> _sessionMap = new Dictionary<string, SessionSnapshot>(StringComparer.OrdinalIgnoreCase);
 
         private void Awake()
         {
-            if (Instance == null) Instance = this;
-            else Destroy(gameObject);
+            if (Instance == null)
+            {
+                Instance = this;
+                DontDestroyOnLoad(gameObject);
+            }
+            else
+            {
+                Destroy(gameObject);
+            }
         }
 
         public void LoadConfig(string jsonConfig)
@@ -99,7 +107,7 @@ namespace Forge.Core.Session
                 Debug.LogWarning("[SessionManager] FrameGenerator not found in scene.");
             }
 
-            UpsertSessionSnapshot("running", 0f, CurrentConfig.targetFps);
+            UpsertSessionSnapshot("running", 0f, CurrentConfig.targetFps, 0f, null, DateTime.UtcNow);
         }
 
         public void StopSession()
@@ -110,7 +118,17 @@ namespace Forge.Core.Session
             // but we can force stop or cleanup here.
             FrameGenerator.Instance?.StopGeneration();
 
-            UpsertSessionSnapshot("stopped", 1f, 0f);
+            UpsertSessionSnapshot("stopped", 1f, 0f, 0f, null, DateTime.UtcNow);
+        }
+
+        public void StopAll()
+        {
+            IsSessionRunning = false;
+            FrameGenerator.Instance?.StopGeneration();
+            if (CurrentConfig != null)
+            {
+                UpsertSessionSnapshot("stopped", 1f, 0f, 0f, new[] { "STOP_ALL" }, DateTime.UtcNow);
+            }
         }
 
         // InitializeScene is no longer needed as Perception handles scene setup via Randomizers
@@ -178,23 +196,24 @@ namespace Forge.Core.Session
         public void UpdateProgress(float progress, float fps, float backpressure, string[] warnings)
         {
             if (CurrentConfig == null) return;
-            UpsertSessionSnapshot(IsSessionRunning ? "running" : "stopped", progress, fps, backpressure, warnings);
+            UpsertSessionSnapshot(IsSessionRunning ? "running" : "stopped", progress, fps, backpressure, warnings, DateTime.UtcNow);
         }
 
-        private void UpsertSessionSnapshot(string status, float progress, float fps, float backpressure = 0f, string[] warnings = null)
+        private void UpsertSessionSnapshot(string status, float progress, float fps, float backpressure = 0f, string[] warnings = null, DateTime? updated = null)
         {
             if (CurrentConfig == null) return;
-            var snap = _sessions.Find(s => s.sessionId == CurrentConfig.sessionId);
-            if (snap == null)
+            var sessionId = CurrentConfig.sessionId;
+            if (!_sessionMap.TryGetValue(sessionId, out var snap))
             {
-                snap = new SessionSnapshot { sessionId = CurrentConfig.sessionId };
+                snap = new SessionSnapshot { sessionId = sessionId };
+                _sessionMap[sessionId] = snap;
                 _sessions.Add(snap);
             }
             snap.status = status;
             snap.progress = progress;
             snap.qualityMode = CurrentConfig.qualityMode;
             snap.frameRatePolicy = CurrentConfig.frameRatePolicy;
-            snap.updatedAt = DateTime.UtcNow.ToString("o");
+            snap.updatedAt = (updated ?? DateTime.UtcNow).ToString("o");
             snap.fps = fps;
             snap.totalFrames = CurrentConfig.totalFrames;
             snap.backpressure = backpressure;

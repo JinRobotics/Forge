@@ -1,8 +1,11 @@
+using System;
 using System.Collections;
 using System.IO;
 using UnityEngine;
 using Forge.Core.Session;
 using System.Linq;
+using System.Collections.Generic;
+using UnityEngine.Perception.GroundTruth;
 
 namespace Forge.Core.Pipeline
 {
@@ -19,10 +22,25 @@ namespace Forge.Core.Pipeline
         public bool IsRunning { get; private set; }
         public float Backpressure { get; private set; }
         public string[] Warnings { get; private set; } = Array.Empty<string>();
-        public float QueueDepthSummary => Backpressure;
+        public float QueueDepthSummary { get; private set; }
         public float CaptureTimeMs { get; private set; }
         private readonly System.Collections.Generic.Queue<float> _frameTimes = new System.Collections.Generic.Queue<float>();
         private const int WindowSize = 30;
+
+        // 간단한 큐 시뮬레이션 (Capture 단계 큐 길이)
+        private int _queueDepth = 0;
+        private const int QueueLimit = 64;
+        private int _errorCount = 0;
+        private int _skipDueToErrors = 0;
+        private int _skipDueToBackpressure = 0;
+        private readonly System.Collections.Generic.Queue<int> _queueDepthHistory = new System.Collections.Generic.Queue<int>();
+        private const int QueueDepthWindow = 30;
+        private const int MaxRetryPerFrame = 3;
+        private bool _noCameraWarning = false;
+        private string _outputDir;
+        private float _captureMsSum = 0f;
+        private int _captureCount = 0;
+        private float _backpressureSum = 0f;
 
         private Coroutine _loop;
         private Camera[] _captureCameras = Array.Empty<Camera>();
@@ -45,10 +63,13 @@ namespace Forge.Core.Pipeline
         public void StartGeneration(SessionConfig config)
         {
             StopGeneration();
-            _captureCameras = FindObjectsOfType<Camera>().Where(c => c.enabled).ToArray();
+            _captureCameras = FindObjectsOfType<Camera>()
+                .Where(c => c != null && c.enabled && (c.GetComponent<PerceptionCamera>() != null || c.CompareTag("MainCamera")))
+                .ToArray();
             if (_captureCameras.Length == 0)
             {
-                Debug.LogWarning("[FrameGenerator] No cameras found. Captures will be skipped.");
+                Debug.LogWarning("[FrameGenerator] No cameras found (Perception or MainCamera). Captures will be skipped.");
+                _noCameraWarning = true;
             }
             _loop = StartCoroutine(GenerateFrames(config));
         }
@@ -72,41 +93,81 @@ namespace Forge.Core.Pipeline
             Warnings = Array.Empty<string>();
             CaptureTimeMs = 0f;
 
-            var outputDir = Path.Combine(Application.persistentDataPath, "Sessions", config.sessionId);
-            if (!Directory.Exists(outputDir))
+            _outputDir = Path.Combine(Application.persistentDataPath, "Sessions", config.sessionId);
+            if (!Directory.Exists(_outputDir))
             {
-                Directory.CreateDirectory(outputDir);
+                Directory.CreateDirectory(_outputDir);
             }
+            _captureMsSum = 0f;
+            _captureCount = 0;
+            _backpressureSum = 0f;
+            _skipDueToBackpressure = 0;
 
             for (int i = 0; i < config.totalFrames && SessionManager.Instance != null && SessionManager.Instance.IsSessionRunning; i++)
             {
                 CurrentFrame = i + 1;
 
                 // TODO: Annotation/Encode/Storage 단계로 교체
-                var labelPath = Path.Combine(outputDir, $"frame_{CurrentFrame:D6}.json");
-                File.WriteAllText(labelPath, $"{{\"frame\":{CurrentFrame},\"session\":\"{config.sessionId}\"}}");
+                // 더미 라벨 JSON 생성 (GT Annotation 대체)
+                var labelPath = Path.Combine(_outputDir, $"frame_{CurrentFrame:D6}.json");
+                var labelJson = SimpleLabeler.GenerateLabelJson(CurrentFrame, config.sessionId, config.cameras?[0].width ?? Screen.width, config.cameras?[0].height ?? Screen.height);
+                File.WriteAllText(labelPath, labelJson);
 
-                var imagePath = Path.Combine(outputDir, $"frame_{CurrentFrame:D6}.jpg");
+                var imagePath = Path.Combine(_outputDir, $"frame_{CurrentFrame:D6}.jpg");
                 var start = Time.realtimeSinceStartup;
-                CaptureJpg(imagePath, config);
+                int attempts = 0;
+                bool success = false;
+                while (attempts < MaxRetryPerFrame && !success)
+                {
+                    try
+                    {
+                        attempts++;
+                        CaptureJpg(imagePath, config);
+                        success = true;
+                    }
+                    catch (System.Exception e)
+                    {
+                        _errorCount++;
+                        if (attempts >= MaxRetryPerFrame)
+                        {
+                            _skipDueToErrors++;
+                            Debug.LogError($"[FrameGenerator] Capture failed after retries: {e.Message}");
+                        }
+                        else
+                        {
+                            Debug.LogWarning($"[FrameGenerator] Capture retry {attempts}: {e.Message}");
+                        }
+                    }
+                }
                 CaptureTimeMs = (Time.realtimeSinceStartup - start) * 1000f;
+                _captureMsSum += CaptureTimeMs;
+                _captureCount++;
+                _queueDepth = Mathf.Max(0, _queueDepth - 1);
 
-                // 간단한 백프레셔 계산: 최근 WindowSize 평균 프레임시간 기반
+                // 간단한 백프레셔 계산: 최근 WindowSize 평균 프레임시간 + 큐 평균
                 _frameTimes.Enqueue(CaptureTimeMs);
                 while (_frameTimes.Count > WindowSize) _frameTimes.Dequeue();
                 float avgMs = 0f;
                 foreach (var t in _frameTimes) avgMs += t;
                 avgMs /= _frameTimes.Count;
                 float targetFrameTime = config.targetFps > 0 ? 1000f / config.targetFps : 33f;
-                Backpressure = Mathf.Clamp01(avgMs / targetFrameTime);
-                if (Backpressure > 0.7f)
-                {
-                    Warnings = new[] { $"BACKPRESSURE_HIGH ({Backpressure:0.00})" };
-                }
-                else
-                {
-                    Warnings = Array.Empty<string>();
-                }
+                float timeBackpressure = Mathf.Clamp01(avgMs / targetFrameTime);
+                _queueDepthHistory.Enqueue(_queueDepth);
+                while (_queueDepthHistory.Count > QueueDepthWindow) _queueDepthHistory.Dequeue();
+                float avgQueue = 0f;
+                foreach (var q in _queueDepthHistory) avgQueue += q;
+                avgQueue = _queueDepthHistory.Count > 0 ? avgQueue / _queueDepthHistory.Count : 0f;
+                float queueBackpressure = QueueMetrics.NormalizeQueue((int)avgQueue, QueueLimit);
+                Backpressure = Mathf.Clamp01(Mathf.Max(timeBackpressure, queueBackpressure));
+                _backpressureSum += Backpressure;
+                QueueDepthSummary = queueBackpressure;
+                var warns = new List<string>();
+                if (Backpressure > 0.7f) warns.Add($"BACKPRESSURE_HIGH ({Backpressure:0.00})");
+                if (_skipDueToBackpressure > 0) warns.Add($"SKIP_BACKPRESSURE ({_skipDueToBackpressure})");
+                if (_errorCount > 0) warns.Add($"CAPTURE_ERRORS ({_errorCount})");
+                if (_skipDueToErrors > 0) warns.Add($"CAPTURE_SKIPPED ({_skipDueToErrors})");
+                if (_noCameraWarning) warns.Add("NO_CAPTURE_CAMERA");
+                Warnings = warns.ToArray();
 
                 // 진행률/추정 FPS 업데이트 (세션 스냅샷)
                 SessionManager.Instance.UpdateProgress(
@@ -121,6 +182,11 @@ namespace Forge.Core.Pipeline
 
             IsRunning = false;
             SessionManager.Instance?.StopSession();
+
+            // 보고서 생성 (manifest/validation/statistics 간이 버전)
+            float avgCaptureMs = _captureCount > 0 ? _captureMsSum / _captureCount : 0f;
+            float avgBackpressure = _captureCount > 0 ? _backpressureSum / _captureCount : 0f;
+            ReportGenerator.WriteReports(_outputDir, config, CurrentFrame, avgCaptureMs, avgBackpressure, Warnings);
         }
 
         private void CaptureJpg(string path, SessionConfig config)
@@ -132,10 +198,13 @@ namespace Forge.Core.Pipeline
 
             EnsureBuffers(camCount, config);
 
+            _queueDepth = Mathf.Min(QueueLimit, _queueDepth + camCount);
+
             for (int i = 0; i < camCount; i++)
             {
                 var cam = _captureCameras[i];
                 if (cam == null) continue;
+                if (_errorCount > 50) continue; // 오류가 과도하면 캡처 스킵
                 var rt = _rts[i];
                 var tex = _texes[i];
                 cam.targetTexture = rt;

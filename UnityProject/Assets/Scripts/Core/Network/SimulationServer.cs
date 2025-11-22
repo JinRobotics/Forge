@@ -4,6 +4,7 @@ using System.IO;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Linq;
 using UnityEngine;
 using Forge.Core.Session;
 
@@ -98,8 +99,8 @@ namespace Forge.Core.Network
                 {
                     case "/sessions":
                         {
-                            var sessions = SessionManager.Instance != null ? SessionManager.Instance.GetSessions() : Array.Empty<Forge.Core.Session.SessionSnapshot>();
-                            responseString = JsonUtility.ToJson(new Wrapper<Forge.Core.Session.SessionSnapshot> { sessions = sessions });
+                            var sessions = SessionManager.Instance != null ? SessionManager.Instance.GetSessions() : System.Array.Empty<Forge.Core.Session.SessionSnapshot>();
+                            responseString = JsonUtility.ToJson(new Wrapper<Forge.Core.Session.SessionSnapshot> { sessions = sessions.ToArray() });
                             response.ContentType = "application/json";
                             break;
                         }
@@ -125,6 +126,10 @@ namespace Forge.Core.Network
                         responseString = "{\"ok\":true}";
                         break;
                     case "/session/stop":
+                        SessionManager.Instance?.StopSession();
+                        responseString = "{\"ok\":true}";
+                        break;
+                    case "/session/stop_all":
                         SessionManager.Instance?.StopSession();
                         responseString = "{\"ok\":true}";
                         break;
