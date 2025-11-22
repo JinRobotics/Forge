@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Forge Dashboard</title>
+  <style>
+    body { margin:0; font-family:'Inter','Noto Sans KR',sans-serif; background:#0f1115; color:#fff; }
+    header { height:56px; display:flex; align-items:center; justify-content:space-between; padding:0 20px; border-bottom:1px solid #2e323b; background:#1a1d24; }
+    .layout { display:grid; grid-template-columns:320px 1fr; height:calc(100vh - 56px); }
+    .sidebar { border-right:1px solid #2e323b; padding:20px; background:#12141a; overflow-y:auto; }
+    .card { background:rgba(255,255,255,0.03); border:1px solid #2e323b; border-radius:8px; padding:16px; margin-bottom:16px; }
+    .card h4 { margin:0 0 8px 0; color:#a0a0a0; font-size:12px; letter-spacing:0.3px; text-transform:uppercase; }
+    .status { font-size:24px; font-weight:600; }
+    .status.ok { color:#1daa3e; }
+    .status.err { color:#e63946; }
+    .metric-row { display:flex; justify-content:space-between; font-size:13px; margin-top:6px; color:#a0a0a0; }
+    .main { padding:24px; overflow-y:auto; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th, td { padding:12px 10px; border-bottom:1px solid #2e323b; text-align:left; }
+    th { color:#a0a0a0; font-weight:600; }
+    .badge { padding:4px 8px; border-radius:4px; font-size:11px; font-weight:600; }
+    .badge.running { background:rgba(29,170,62,0.15); color:#1daa3e; }
+    .badge.completed { background:rgba(43,103,246,0.15); color:#2b67f6; }
+    .progress { display:flex; align-items:center; gap:8px; }
+    .bar { height:6px; background:#2e323b; border-radius:3px; width:120px; overflow:hidden; }
+    .fill { height:100%; background:#2b67f6; width:0%; }
+    .banner { background:rgba(230,57,70,0.12); color:#e63946; padding:8px 12px; border-radius:4px; font-size:12px; display:none; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo">Forge Dashboard</div>
+    <div id="banner" class="banner">⚠️ Unity/SimulationServer 연결 오류</div>
+  </header>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="card">
+        <h4>엔진 상태</h4>
+        <div id="engine-status" class="status">—</div>
+        <div class="metric-row"><span>FPS</span><span id="engine-fps">—</span></div>
+        <div class="metric-row"><span>Frame</span><span id="engine-frame">— / —</span></div>
+        <div class="metric-row"><span>Backpressure</span><span id="engine-bp">—</span></div>
+        <div class="metric-row"><span>Warnings</span><span id="engine-warn">—</span></div>
+        <div class="metric-row"><span>Quality</span><span id="engine-quality">—</span></div>
+        <div class="metric-row"><span>FR Policy</span><span id="engine-frp">—</span></div>
+      </div>
+      <div class="card">
+        <h4>현재 세션</h4>
+        <div class="metric-row"><span>ID</span><span id="sess-id">—</span></div>
+        <div class="metric-row"><span>진행률</span><span id="sess-progress">—</span></div>
+      </div>
+    </aside>
+    <main class="main">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <h2 style="margin:0;">세션 목록</h2>
+        <button style="background:#2b67f6; color:#fff; border:none; padding:10px 16px; border-radius:6px; cursor:pointer;">+ 새 세션</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>세션 ID</th><th>상태</th><th>FPS</th><th>진행률</th><th>품질</th><th>업데이트</th>
+          </tr>
+        </thead>
+        <tbody id="session-table">
+          <tr><td colspan="6" style="text-align:center; color:#666;">데이터 없음</td></tr>
+        </tbody>
+      </table>
+    </main>
+  </div>
+  <script>
+    const banner = document.getElementById('banner');
+    const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+
+    async function fetchStatus() {
+      try {
+        const res = await fetch('/api/status');
+        if (!res.ok) throw new Error();
+        const d = await res.json();
+        banner.style.display = 'none';
+        setText('engine-status', d.isRunning ? '실행 중' : '정지');
+        const statusEl = document.getElementById('engine-status');
+        statusEl.className = 'status ' + (d.isRunning ? 'ok' : '');
+        setText('engine-fps', (d.fps || 0).toFixed(2));
+        setText('engine-frame', `${d.currentFrame ?? 0} / ${d.totalFrames ?? 0}`);
+        setText('engine-bp', d.backpressure?.toFixed ? d.backpressure.toFixed(2) : '—');
+        setText('engine-warn', Array.isArray(d.warnings) ? d.warnings.length : '0');
+        setText('engine-quality', d.qualityMode || '—');
+        setText('engine-frp', d.frameRatePolicy || '—');
+        setText('sess-id', d.sessionId || '—');
+        const prog = Math.min(100, Math.max(0, Math.round((d.progress || 0) * 100)));
+        setText('sess-progress', prog + '%');
+        renderSessions(d.sessions || []);
+      } catch (e) {
+        banner.style.display = 'block';
+        setText('engine-status', '오프라인');
+        const statusEl = document.getElementById('engine-status');
+        statusEl.className = 'status err';
+      }
+    }
+
+    function renderSessions(list) {
+      const tbody = document.getElementById('session-table');
+      if (!tbody) return;
+      if (!list.length) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#666;">세션 데이터 없음</td></tr>';
+        return;
+      }
+      tbody.innerHTML = '';
+      list.forEach(s => {
+        const prog = Math.min(100, Math.max(0, Math.round((s.progress || 0) * 100)));
+        const row = document.createElement('tr');
+        row.innerHTML = `
+          <td>${s.sessionId}</td>
+          <td><span class="badge ${s.status === 'running' ? 'running' : s.status === 'completed' ? 'completed' : ''}">${s.status || '-'}</span></td>
+          <td>${(s.fps || 0).toFixed(2)}</td>
+          <td class="progress"><div class="bar"><div class="fill" style="width:${prog}%;"></div></div>${prog}%</td>
+          <td>${s.qualityMode || '-'}</td>
+          <td>${s.updatedAt || '-'}</td>
+        `;
+        tbody.appendChild(row);
+      });
+    }
+    fetchStatus();
+    setInterval(fetchStatus, 3000);
+  </script>
+</body>
+</html>

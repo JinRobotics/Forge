@@ -50,6 +50,12 @@ Scene Editor는 다음 데이터를 기반으로 작동한다:
 
 ---
 
+## 2.1 구현 노트 (Unity Editor 기준)
+
+- Scene Editor는 **Unity Editor 전용 윈도우**(SceneEditorWindow)를 기본 구현으로 한다.
+- 웹 기반 Scene Editor 시안은 사용하지 않으며, 원격 편집이 필요할 경우 Phase 3+ 별도 서비스로 검토한다.
+- 카메라 배치/회전/FOV 편집, Crowd 설정, Undo/Redo/스냅 규칙은 Unity Editor UI로 제공한다.
+
 # 3. 주요 기능 (Features)
 
 ## 3.1 Scene Floorplan 시각화

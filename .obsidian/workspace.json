@@ -268,8 +268,15 @@
       "bases:Create new base": false
     }
   },
-  "active": "d7b1f9823324251e",
+  "active": "a3a5d0e7cf378231",
   "lastOpenFiles": [
+    "Forge.Server/public/index.html",
+    "Forge.Server/public",
+    "docs/design/UIUX/wireframes/session_detail.html",
+    "docs/design/UIUX/wireframes/new_session.html",
+    "docs/design/UIUX/wireframes/dashboard.html",
+    "docs/design/UIUX/wireframes",
+    "UnityProject/Assets/Scripts/Core/Pipeline/FrameGenerator.cs",
     "docs/design/UIUX/17_UI_Scene_Editor_Spec.md",
     "docs/plan/phase4.md",
     "docs/plan/phase3.md",
@@ -283,13 +290,7 @@
     "UnityProject/Packages/manifest.json",
     "docs/verification_report.md",
     "UnityProject/Assets/Samples/Perception Configs/SemanticSegmentationLabelConfig.asset.meta",
-    "UnityProject/Assets/Samples/Perception Configs/IdLabelConfig.asset.meta",
-    "UnityProject/Assets/Samples/Perception Configs/SemanticSegmentationLabelConfig.asset",
-    "UnityProject/Assets/Samples/Perception Configs/IdLabelConfig.asset",
-    "UnityProject/Assets/Samples/Perception Configs",
-    "UnityProject/Assets/Samples/Background Textures/Pear/Conference/Conference_045.jpg.meta",
     "UnityProject/Assets/Samples/Background Textures/Pear/Conference/Conference_045.jpg",
-    "UnityProject/Assets/Samples/Background Textures/Pear/Conference/Conference_044.jpg.meta",
     "UnityProject/Assets/Samples/Background Textures/Pear/Conference/Conference_044.jpg",
     "UnityProject/Assets/Samples/Background Textures/Pear/Conference/Conference_043.jpg",
     "UnityProject/Assets/Samples/Background Textures/Pear/Conference/Conference_042.jpg",
@@ -314,7 +315,6 @@
     "UnityProject/Packages/com.unity.perception/Documentation~/Schema/PerceptionSchema.md",
     "UnityProject/Packages/com.unity.perception/Documentation~/HumanPose/TUTORIAL.md",
     "UnityProject/Packages/com.unity.perception/Documentation~/Randomization/index.md",
-    "UnityProject/Packages/com.unity.perception/Documentation~/Randomization/Scenarios.md",
-    "UnityProject/Packages/com.unity.perception/Documentation~/Randomization/Samplers.md"
+    "UnityProject/Packages/com.unity.perception/Documentation~/Randomization/Scenarios.md"
   ]
 }

@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Forge - 새 세션 (Wireframe)</title>
+  <style>
+    body { margin:0; font-family:'Inter','Noto Sans KR',sans-serif; background:#0f1115; color:#fff; }
+    header { height:56px; display:flex; align-items:center; justify-content:space-between; padding:0 20px; border-bottom:1px solid #2e323b; background:#1a1d24; }
+    .container { display:grid; grid-template-columns:2fr 1fr; height:calc(100vh - 56px); }
+    .form { padding:32px; border-right:1px solid #2e323b; overflow-y:auto; }
+    .preview { padding:24px; background:#12141a; }
+    h1 { margin:0 0 20px 0; font-size:22px; }
+    .group { margin-bottom:20px; }
+    label { display:block; margin-bottom:8px; color:#a0a0a0; font-size:13px; }
+    input, select { width:100%; padding:12px; border-radius:6px; border:1px solid #2e323b; background:#1a1d24; color:#fff; }
+    .radio-row { display:flex; gap:12px; }
+    .radio { flex:1; border:1px solid #2e323b; border-radius:6px; padding:12px; cursor:pointer; }
+    .actions { display:flex; gap:12px; margin-top:20px; }
+    button { border:none; border-radius:6px; padding:12px 18px; cursor:pointer; }
+    .primary { background:#2b67f6; color:#fff; }
+    .secondary { background:transparent; color:#a0a0a0; border:1px solid #2e323b; }
+    .scene-card { border:1px solid #2e323b; border-radius:8px; padding:12px; background:rgba(255,255,255,0.03); }
+    .camera-list { margin-top:12px; }
+    .cam { display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #2e323b; font-size:13px; color:#ddd; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>Forge 새 세션</div>
+    <div style="color:#a0a0a0; font-size:13px;">설계 문서 16/17 기반 UI</div>
+  </header>
+  <div class="container">
+    <div class="form">
+      <h1>새 세션 생성</h1>
+      <div class="group">
+        <label>세션 ID</label>
+        <input type="text" placeholder="session_001">
+      </div>
+      <div class="group">
+        <label>총 프레임 수</label>
+        <input type="number" placeholder="100000">
+        <div style="font-size:12px; color:#a0a0a0; margin-top:4px;">스키마 검증 결과/오류 메시지 표시</div>
+      </div>
+      <div class="group">
+        <label>품질 모드</label>
+        <div class="radio-row">
+          <div class="radio">엄격 (Strict)</div>
+          <div class="radio">유연 (Relaxed)</div>
+        </div>
+      </div>
+      <div class="group">
+        <label>프레임 속도 정책</label>
+        <select>
+          <option>품질 우선</option>
+          <option>처리량 우선</option>
+          <option>균형</option>
+        </select>
+      </div>
+      <div class="group">
+        <label>Scene 선택</label>
+        <select>
+          <option>Factory_Floor_A</option>
+          <option>Office_Complex_B</option>
+          <option>Warehouse_Logistics_C</option>
+        </select>
+      </div>
+      <div class="group">
+        <label>Config 업로드 (JSON)</label>
+        <input type="file" accept=".json">
+        <div style="font-size:12px; color:#a0a0a0; margin-top:4px;">유효성 실패 시 필드 하이라이트/툴팁</div>
+      </div>
+      <div class="actions">
+        <button class="primary">세션 시작</button>
+        <button class="secondary">취소</button>
+      </div>
+    </div>
+    <div class="preview">
+      <div class="scene-card">
+        <div style="font-weight:600; margin-bottom:4px;">선택된 Scene</div>
+        <div style="font-size:12px; color:#a0a0a0;">Factory_Floor_A · NavMesh: baked</div>
+        <div class="camera-list">
+          <div class="cam"><span>cam_01_overhead</span><span>1920x1080</span></div>
+          <div class="cam"><span>cam_02_conveyor</span><span>1920x1080</span></div>
+          <div class="cam"><span>bot_cam_01 (이동형)</span><span>720p</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

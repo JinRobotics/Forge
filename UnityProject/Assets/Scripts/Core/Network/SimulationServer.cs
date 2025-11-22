@@ -98,7 +98,7 @@ namespace Forge.Core.Network
                 {
                     case "/session/init":
                         if (request.HttpMethod != "POST") { statusCode = 405; break; }
-                        using (var reader = new System.IO.StreamReader(request.InputStream, request.ContentEncoding))
+                        using (var reader = new StreamReader(request.InputStream, request.ContentEncoding))
                         {
                             var body = reader.ReadToEnd();
                             SessionManager.Instance?.LoadConfig(body);
@@ -142,7 +142,9 @@ namespace Forge.Core.Network
             var manager = SessionManager.Instance;
             var scenario = ForgeScenario.Instance;
 
-            int currentFrame = scenario != null ? scenario.CurrentIteration : 0;
+            var frameGen = Forge.Core.Pipeline.FrameGenerator.Instance;
+
+            int currentFrame = frameGen != null ? frameGen.CurrentFrame : (scenario != null ? scenario.CurrentIteration : 0);
             int totalFrames = scenario != null ? scenario.TotalIterations : Math.Max(manager?.CurrentConfig?.totalFrames ?? 1, 1);
 
             var status = new
@@ -154,7 +156,9 @@ namespace Forge.Core.Network
                 currentFrame = currentFrame,
                 totalFrames = totalFrames,
                 simulationTick = scenario?.CurrentIteration ?? 0,
-                backpressure = 0f // placeholder for Phase 1
+                backpressure = 0f, // placeholder for Phase 1
+                qualityMode = manager?.CurrentConfig?.qualityMode ?? "strict",
+                frameRatePolicy = manager?.CurrentConfig?.frameRatePolicy ?? "quality_first"
             };
 
             json = JsonUtility.ToJson(status);

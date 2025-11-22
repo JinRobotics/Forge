@@ -5,6 +5,7 @@ const url = require('url');
 
 const PORT = 3000;
 const UNITY_PORT = 8080;
+const PUBLIC_DIR = path.join(__dirname, 'public');
 const DOCS_DIR = path.join(__dirname, '../docs/design/UIUX');
 
 const server = http.createServer((req, res) => {
@@ -37,12 +38,7 @@ const server = http.createServer((req, res) => {
     }
 
     // Static File Serving
-    let filePath = path.join(DOCS_DIR, parsedUrl.pathname === '/' ? 'dashboard_mockup.html' : parsedUrl.pathname);
-    
-    // Map specific URLs to mockups for convenience
-    if (parsedUrl.pathname === '/dashboard') filePath = path.join(DOCS_DIR, 'dashboard_mockup.html');
-    if (parsedUrl.pathname === '/new_session') filePath = path.join(DOCS_DIR, 'new_session_mockup.html');
-    if (parsedUrl.pathname === '/session_detail') filePath = path.join(DOCS_DIR, 'session_detail_mockup.html');
+    let filePath = path.join(PUBLIC_DIR, parsedUrl.pathname === '/' ? 'index.html' : parsedUrl.pathname);
 
     const extname = path.extname(filePath);
     let contentType = 'text/html';
@@ -72,6 +68,6 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, () => {
     console.log(`Web Dashboard running at http://localhost:${PORT}/`);
-    console.log(`Serving files from: ${DOCS_DIR}`);
+    console.log(`Serving files from: ${PUBLIC_DIR}`);
     console.log(`Proxying /api/* to Unity at http://localhost:${UNITY_PORT}/`);
 });

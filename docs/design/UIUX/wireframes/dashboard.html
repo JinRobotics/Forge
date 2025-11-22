@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Forge Dashboard (Wireframe)</title>
+  <style>
+    body { margin:0; font-family: 'Inter', 'Noto Sans KR', sans-serif; background:#0f1115; color:#fff; }
+    header { height:56px; display:flex; align-items:center; justify-content:space-between; padding:0 20px; border-bottom:1px solid #2e323b; background:#1a1d24; }
+    .logo { font-weight:700; }
+    .banner { background:rgba(230,57,70,0.12); color:#e63946; padding:8px 12px; border-radius:4px; font-size:12px; }
+    .layout { display:grid; grid-template-columns:320px 1fr; height:calc(100vh - 56px); }
+    .sidebar { border-right:1px solid #2e323b; padding:20px; background:#12141a; overflow-y:auto; }
+    .card { background:rgba(255,255,255,0.03); border:1px solid #2e323b; border-radius:8px; padding:16px; margin-bottom:16px; }
+    .card h4 { margin:0 0 8px 0; color:#a0a0a0; font-size:12px; letter-spacing:0.3px; text-transform:uppercase; }
+    .status { font-size:24px; font-weight:600; }
+    .status.ok { color:#1daa3e; }
+    .status.warn { color:#f5a524; }
+    .status.err { color:#e63946; }
+    .metric-row { display:flex; justify-content:space-between; font-size:13px; margin-top:6px; color:#a0a0a0; }
+    .main { padding:24px; overflow-y:auto; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th, td { padding:12px 10px; border-bottom:1px solid #2e323b; text-align:left; }
+    th { color:#a0a0a0; font-weight:600; }
+    .badge { padding:4px 8px; border-radius:4px; font-size:11px; font-weight:600; }
+    .badge.running { background:rgba(29,170,62,0.15); color:#1daa3e; }
+    .badge.completed { background:rgba(43,103,246,0.15); color:#2b67f6; }
+    .badge.paused { background:rgba(245,165,36,0.15); color:#f5a524; }
+    .progress { display:flex; align-items:center; gap:8px; }
+    .bar { height:6px; background:#2e323b; border-radius:3px; width:120px; overflow:hidden; }
+    .fill { height:100%; background:#2b67f6; width:40%; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo">Forge Dashboard</div>
+    <div class="banner">⚠️ Unity/SimulationServer 실행 여부를 확인하세요.</div>
+  </header>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="card">
+        <h4>엔진 상태</h4>
+        <div id="engine-status" class="status">—</div>
+        <div class="metric-row"><span>FPS</span><span id="engine-fps">—</span></div>
+        <div class="metric-row"><span>Frame</span><span id="engine-frame">— / —</span></div>
+        <div class="metric-row"><span>Backpressure</span><span id="engine-bp">—</span></div>
+        <div class="metric-row"><span>Warnings</span><span id="engine-warn">—</span></div>
+      </div>
+      <div class="card">
+        <h4>현재 세션</h4>
+        <div class="metric-row"><span>ID</span><span id="sess-id">—</span></div>
+        <div class="metric-row"><span>진행률</span><span id="sess-progress">—</span></div>
+      </div>
+    </aside>
+    <main class="main">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <h2 style="margin:0;">세션 목록</h2>
+        <button style="background:#2b67f6; color:#fff; border:none; padding:10px 16px; border-radius:6px; cursor:pointer;">+ 새 세션</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>세션 ID</th>
+            <th>상태</th>
+            <th>FPS</th>
+            <th>진행률</th>
+            <th>품질</th>
+            <th>업데이트</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>factory_sim_01</td>
+            <td><span class="badge running">실행 중</span></td>
+            <td>—</td>
+            <td class="progress"><div class="bar"><div class="fill" style="width:12%;"></div></div>12%</td>
+            <td>strict</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td>office_test_batch</td>
+            <td><span class="badge completed">완료</span></td>
+            <td>-</td>
+            <td class="progress"><div class="bar"><div class="fill" style="width:100%;"></div></div>100%</td>
+            <td>relaxed</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </main>
+  </div>
+  <script>
+    async function fetchStatus() {
+      try {
+        const res = await fetch('/api/status');
+        if (!res.ok) throw new Error();
+        const d = await res.json();
+        document.getElementById('engine-status').textContent = d.isRunning ? '실행 중' : '정지';
+        document.getElementById('engine-status').className = 'status ' + (d.isRunning ? 'ok' : '');
+        document.getElementById('engine-fps').textContent = (d.fps || 0).toFixed(2);
+        document.getElementById('engine-frame').textContent = `${d.currentFrame ?? 0} / ${d.totalFrames ?? 0}`;
+        document.getElementById('engine-bp').textContent = d.backpressure?.toFixed ? d.backpressure.toFixed(2) : '—';
+        document.getElementById('engine-warn').textContent = d.warnings?.length ? d.warnings.length : '0';
+        document.getElementById('sess-id').textContent = d.sessionId || '—';
+        const prog = Math.min(100, Math.max(0, Math.round((d.progress || 0) * 100)));
+        document.getElementById('sess-progress').textContent = prog + '%';
+      } catch (e) {
+        document.getElementById('engine-status').textContent = '오프라인';
+        document.getElementById('engine-status').className = 'status err';
+      }
+    }
+    fetchStatus();
+    setInterval(fetchStatus, 3000);
+  </script>
+</body>
+</html>

@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Forge - 세션 상세 (Wireframe)</title>
+  <style>
+    body { margin:0; font-family:'Inter','Noto Sans KR',sans-serif; background:#0f1115; color:#fff; }
+    header { height:56px; display:flex; align-items:center; justify-content:space-between; padding:0 20px; border-bottom:1px solid #2e323b; background:#1a1d24; }
+    .tabs { display:flex; gap:20px; padding:0 20px; border-bottom:1px solid #2e323b; background:#1a1d24; }
+    .tab { padding:14px 0; color:#a0a0a0; cursor:pointer; font-weight:600; }
+    .tab.active { color:#2b67f6; border-bottom:2px solid #2b67f6; }
+    .content { padding:20px; display:grid; grid-template-columns:3fr 1fr; gap:20px; }
+    .card { background:rgba(255,255,255,0.03); border:1px solid #2e323b; border-radius:8px; padding:16px; margin-bottom:16px; }
+    .card h3 { margin:0 0 10px 0; font-size:16px; }
+    .camera-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:12px; }
+    .cam { background:#000; aspect-ratio:16/9; position:relative; border-radius:6px; }
+    .cam label { position:absolute; top:8px; left:8px; background:rgba(0,0,0,0.6); padding:4px 8px; border-radius:4px; font-size:12px; }
+    .metrics { display:flex; flex-direction:column; gap:12px; }
+    .metric { background:rgba(255,255,255,0.03); padding:12px; border-radius:6px; }
+    .progress-bar { height:6px; background:#2e323b; border-radius:3px; overflow:hidden; margin-top:6px; }
+    .progress-fill { height:100%; background:#2b67f6; width:12%; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>factory_sim_01 <span style="color:#1daa3e; font-size:13px;">● 실행 중</span></div>
+    <div style="font-size:13px; color:#a0a0a0;">Scene: Factory_Floor_A · 품질: strict</div>
+  </header>
+  <div class="tabs">
+    <div class="tab active">개요 / Cameras</div>
+    <div class="tab">Validation</div>
+    <div class="tab">Statistics</div>
+    <div class="tab">Manifest</div>
+  </div>
+  <div class="content">
+    <div>
+      <div class="card">
+        <h3>실시간 미리보기</h3>
+        <div class="camera-grid">
+          <div class="cam"><label>cam_01</label></div>
+          <div class="cam"><label>cam_02</label></div>
+          <div class="cam"><label>cam_03</label></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>최근 로그</h3>
+        <div style="font-family:monospace; font-size:12px; color:#ddd;">
+          [14:20:01] Frame 12340 생성 (14.2ms)<br>
+          [14:20:02] Backpressure 경고 (capture=0.75)<br>
+          [14:20:02] Frame 12341 생성 (13.8ms)
+        </div>
+      </div>
+    </div>
+    <div class="metrics">
+      <div class="metric">
+        <div style="font-size:12px; color:#a0a0a0;">FPS</div>
+        <div style="font-size:22px; font-weight:700;">14.5</div>
+        <div style="font-size:12px; color:#a0a0a0;">목표: 15</div>
+      </div>
+      <div class="metric">
+        <div style="font-size:12px; color:#a0a0a0;">진행률</div>
+        <div style="font-size:22px; font-weight:700;">12.3%</div>
+        <div style="font-size:12px; color:#a0a0a0;">12,345 / 100,000</div>
+        <div class="progress-bar"><div class="progress-fill"></div></div>
+      </div>
+      <div class="metric">
+        <div style="font-size:12px; color:#a0a0a0;">Validation</div>
+        <div style="font-size:13px; color:#ddd;">FrameDrop: 2 / PoseMissing: 1 / Drift: false</div>
+      </div>
+      <div class="metric">
+        <div style="font-size:12px; color:#a0a0a0;">Statistics</div>
+        <div style="font-size:13px; color:#ddd;">히스토그램/그래프 영역(occlusion/bbox/detection)</div>
+      </div>
+      <div class="metric">
+        <div style="font-size:12px; color:#a0a0a0;">Manifest 요약</div>
+        <div style="font-size:13px; color:#ddd;">performanceSummary, stageStatuses, edgeArtifacts 요약</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
