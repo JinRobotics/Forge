@@ -1,0 +1,22 @@
+{
+    "name": "forge-server",
+    "version": "0.1.0",
+    "description": "Forge Web Dashboard Backend - Proxies requests to Unity simulation engine",
+    "main": "server.js",
+    "scripts": {
+        "start": "node server.js",
+        "dev": "node server.js"
+    },
+    "keywords": [
+        "forge",
+        "unity",
+        "perception",
+        "dashboard"
+    ],
+    "author": "JinRobotics",
+    "license": "MIT",
+    "engines": {
+        "node": ">=16.0.0"
+    },
+    "dependencies": {}
+}

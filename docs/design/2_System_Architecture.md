@@ -154,200 +154,27 @@ graph TB
 
 ### 3.2 Orchestration Layer
 
-역할:  
+역할:
 - Session 단위의 전체 실행 흐름 제어
-- Scene / Scenario / Environment / Simulation Loop / Pipeline 간 조율
+- **Unity Perception Scenario** 제어 및 상태 모니터링
 
 주요 컴포넌트:
-
-- `SessionManager`
-- `ScenarioManager`
-- `EnvironmentCoordinator`
-- `GenerationController`
-- `PipelineCoordinator`
+- `SessionManager`: 세션 라이프사이클 관리, Perception Scenario 설정.
+- `ForgeScenario` (Wrapper): Perception의 `FixedLengthScenario`를 래핑하여 Forge 시스템과 연동.
+- `ForgeRandomizer`: 커스텀 Randomizer (카메라, 조명, 군중 배치).
 
 #### 3.2.1 SessionManager
+- `SessionConfig`를 받아 `ForgeScenario`를 설정(Configure)하고 시작(Start).
+- Perception의 상태(현재 프레임, 종료 여부)를 모니터링.
 
-- `SessionConfig`를 입력 받아 `SessionContext` 생성
-- 세션 디렉토리(출력 경로) 생성
-- Checkpoint 파일 관리 (Phase 2+)
-- Session 상태 관리 (Running / Paused / Stopped / Error)
+#### 3.2.2 ForgeScenario (Perception Wrapper)
+- **메인 루프 제어**: 기존 `GenerationController`의 역할을 대체.
+- Perception의 `FixedLengthScenario`를 상속받아 정해진 프레임 수만큼 시뮬레이션을 실행.
+- 각 프레임(Iteration)마다 Randomizer를 트리거.
 
-#### 3.2.2 ScenarioManager
-
-- Scene + Domain Randomization + Crowd/Camera 설정 조합으로 `ScenarioContext` 리스트 생성
-- 시나리오 순회(iterator) 제공:
-  - 예: Factory → Office → Warehouse … (Phase 2+)
-- 각 Scenario에 대해 실행 프레임 범위/조건 정의
-
-#### 3.2.3 EnvironmentCoordinator
-
-- Unity Scene 관리 컴포넌트와 연동
-- Scene Pooling 전략에 따라:
-  - 초기 로딩: 필요한 Scene들을 Additive Load
-  - 전환: Enable/Disable로 활성 Scene 전환
-- 환경 변경 시 Camera/Crowd 설정 업데이트 트리거
-
-#### 3.2.3-A SceneTransitionService (책임 분리)
-
-- `ScenarioManager`가 다음 Scenario로 이동할 때 호출되는 전환 서비스.
-- 책임:
-  - Scene 활성화/비활성화
-  - Crowd/PersonState 마이그레이션(Global ID 유지)
-  - NavMesh/조명/시간대/랜덤화 파라미터 적용
-- GenerationController는 이 서비스를 호출만 하고, 전환 세부 로직은 알지 않는다.
-
-**개념 시퀀스:**
-```
-ScenarioManager → SceneTransitionService → EnvironmentService: ActivateScene()
-                                   → CrowdService: Migrate(GlobalID 유지)
-                                   → TimeWeatherService: Apply(time/weather)
-                                   → CameraService: ReconfigureIfNeeded()
-```
-
-#### 3.2.4 GenerationController
-
-- **메인 프레임 루프** 담당
-- **Unity 독립성**: Unity API에 직접 의존하지 않고, `ISimulationGateway`/`IFrameProvider` 추상화를 통해 프레임 틱을 수신
-- 각 프레임마다 다음을 수행(핵심 책임만):
-  1. 활성 `ScenarioContext`에 맞춰 SimulationLayer 업데이트 요청
-  2. `FrameContext` 생성 (frame_id, timestamp, scenario 정보)
-  3. `FrameBus`를 통해 Data Pipeline Layer로 Frame 이벤트 전달
-- PipelineCoordinator의 back-pressure 신호와 `IFrameRatePolicy` 결과를 확인하여:
-  - 프레임 생성/skip/일시정지 여부 결정
-  - FPS 조절 적용
-- **주의**: Scene 전환 + Crowd migration 로직은 `ScenarioManager` 혹은 별도 `SceneTransitionService`에서 수행하여 GenerationController의 책임을 최소화한다.
-- **시간축 정의**: `FrameContext.timestamp`는 시뮬레이션 월드 시간(Scenario/TimeWeather 기준)을 사용한다. 재현성 기준은 frame_id/frame_index이며, wall-clock 지연과 무관하게 frame_id 순서를 신뢰한다.
-
-**주요 메서드:**
-```csharp
-class GenerationController {
-    private readonly IFrameProvider _frameProvider;
-    private readonly IScenarioManager _scenarioManager;
-    private readonly IFrameBus _frameBus;
-    private readonly IPipelineCoordinator _pipelineCoordinator;
-
-    // Unity 독립적인 프레임 틱 처리
-    public void OnFrameTick(float deltaTime) {
-        var backPressure = _pipelineCoordinator.GetBackPressureSignal();
-
-        if (backPressure == BackPressureLevel.PAUSE) {
-            HandlePause(deltaTime);
-            return;
-        }
-
-        if (backPressure == BackPressureLevel.SLOW) {
-            AdjustFrameRate(0.7f); // 30% 감속
-        }
-
-        // Scene 전환 체크 (Phase 2+)
-        var scenario = _scenarioManager.GetCurrent();
-        if (_currentFrame >= scenario.EndFrame && _scenarioManager.MoveNext()) {
-            // Scene/Crowd 전환 책임은 SceneTransitionService가 담당
-            scenario = _scenarioManager.GetCurrent();
-            _sceneTransitionService.TransitionTo(scenario);
-        }
-
-        // 프레임 생성
-        var cameras = _frameProvider.GetActiveCameras();
-
-        // PersonState 포함 (Tracking/ReID에서 사용)
-        var personStates = _frameProvider.GetCurrentSceneState().Persons;
-        var frameContext = CreateFrameContext(scenario, personStates);
-
-        _frameBus.Publish(frameContext, cameras);
-        _currentFrame++;
-    }
-
-    private void HandlePause(float deltaTime) {
-        _pausedDuration += TimeSpan.FromSeconds(deltaTime);
-
-        // Deadlock 방지: 최대 5분 후 강제 재개
-        if (_pausedDuration > TimeSpan.FromMinutes(5)) {
-            _logger.LogWarning("Force resume after 5min pause");
-            _pausedDuration = TimeSpan.Zero;
-            _pipelineCoordinator.RequestForceResume();
-        }
-    }
-}
-```
-
-#### 3.2.4-A FrameRatePolicy (정책 분리)
-
-- 역할: Back-pressure, 사용자 설정(quality-first / speed-first / balanced) 등을 종합해 프레임 생성/skip/일시정지를 결정.
-- 인터페이스 예시:
-```csharp
-public interface IFrameRatePolicy {
-    FrameGenerationDecision Decide(BackPressureLevel level, SessionConfig config, long currentFrame);
-}
-
-public enum FrameGenerationDecision {
-    Generate,
-    Skip,
-    Pause
-}
-```
-- GenerationController는 정책 객체 결과만 반영하여 if/else 증가를 피한다.
-- 정책 로더(`FrameRatePolicyFactory`)는 Config에 정의된 `frameRatePolicy.id`를 기반으로 적절한 구현체를 주입하며, 파라미터와 threshold는 `frameRatePolicy.options` 섹션을 통해 전달한다.
-- Config에서 정책을 선택할 수 있도록 확장 (예: `frameRatePolicy.id: "quality_first"`). 정책 정의는 `config/schema/frame_rate_policy.schema.json`에 단일 소스로 관리하고, Application Layer의 `ConfigurationLoader`와 Orchestration Layer의 `SessionManager`가 동일 스키마를 참조한다.
-
-**정책 프리셋**
-
-| 정책 ID | BackPressureLevel → FrameGenerationDecision | 설명 | 대표 시나리오 |
-|---------|--------------------------------------------|------|----------------|
-| `quality_first` | OK→Generate / CAUTION→Generate / SLOW→Skip(1 of N, N=3) / PAUSE→Pause | 라벨 품질을 우선하여 skip 빈도를 최소화하고, Pause 상태에서도 최대 30초마다 health ping을 발생시켜 Deadlock 탐지 | 연구/검증 세션, Robotics 동기화 |
-| `throughput_first` | OK→Generate / CAUTION→Skip(1 of N, N=2) / SLOW→Skip(1 of N, N=1) / PAUSE→Force resume(최대 30s 후) | 프레임 수를 극대화하기 위해 BackPressureLevel에 바로 frame drop을 적용 | Edge 대량 생성, Synthetic pre-train |
-| `balanced` | OK→Generate / CAUTION→Skip(1 of N, N=4) / SLOW→Pause(최대 10s) / PAUSE→Pause | 기본 정책. pipe drain 여부와 CPU/GPU utilization을 MetricsEmitter에서 확인해 auto-switch 조건을 충족하면 품질/처리량 간 동적 전환 | 일반 배포, QA 세션 |
-
-- 운영자는 Config에서 `frameRatePolicy.profileOverrides`를 통해 특정 BackPressureLevel에 대한 커스텀 매핑을 선언할 수 있고, PipelineCoordinator는 `/status`의 `frameRatePolicySummary` 필드로 활성 정책과 최근 전환 결과를 노출한다. Metrics/Tracing은 §3.5 Cross-cutting Services 섹션의 `MetricsEmitter`에 위임한다.
-
-#### 3.2.5 PipelineCoordinator
-
-- Data Pipeline Layer의 각 Worker Queue 상태를 모니터링
-- Back-pressure 정책 적용:
-  - Queue 길이가 threshold 초과 시 GenerationController에 속도 조절 신호 전달
-  - 심각한 경우 frame 생성 일시 중단
-- Worker 장애(에러) 집계:
-  - 재시도/skip/세션 중단 결정
-- 진행률 계산:
-  - 처리된 frame 수 / 목표 frame 수 / 예상 완료 시간 → ProgressReporter로 전달
-  - `/status` API에서 수집한 `engineVersion`, `supportedVersions`, `authMode`를 함께 노출하여 모니터링/운영 대시보드가 버전 불일치나 인증 모드를 즉시 파악할 수 있도록 한다. 이때 `/status`는 다른 엔드포인트와 동일한 인증을 강제하고 워커별 큐 깊이 대신 요약값(최대 큐 사용률)을 반환해 내부 토폴로지 노출을 최소화한다.
-- 구현 체크리스트:
-  - 인증 미들웨어가 `/status`에도 적용되는지 통합 테스트로 확보한다.
-  - `/status`는 내부 Liveness/Readiness/Prometheus pull 용도로 사용하고, UI는 Grafana 등 대시보드 경유로 본다.
-  - 상태 응답은 요약 지표만 제공하고 내부 큐 상세·경로·호스트 정보를 포함하지 않는다.
-  - `allowedHosts`/바인딩 범위 설정이 적용되어 원격 접근이 제한되는지 운영 구성에서 검증한다.
-
-**Back-pressure 알고리즘 (구체화):**
-```csharp
-class PipelineCoordinator {
-    public BackPressureLevel GetBackPressureSignal() {
-        var maxQueueRatio = _workers.Max(w => w.QueueLength / (float)w.QueueCapacity);
-
-        if (maxQueueRatio >= 1.0f) {
-            // 100%: 큐 풀, 프레임 생성 일시정지
-            return BackPressureLevel.PAUSE;
-        }
-        else if (maxQueueRatio >= 0.9f) {
-            // 90%: 위험, 속도 대폭 감소 (30%)
-            return BackPressureLevel.SLOW;
-        }
-        else if (maxQueueRatio >= 0.7f) {
-            // 70%: 주의, 속도 소폭 감소 (10%)
-            return BackPressureLevel.CAUTION;
-        }
-
-        return BackPressureLevel.OK;
-    }
-}
-
-public enum BackPressureLevel {
-    OK,        // 정상 (큐 < 70%)
-    CAUTION,   // 주의 (큐 70-90%, FPS 10% 감소)
-    SLOW,      // 위험 (큐 90-100%, FPS 30% 감소)
-    PAUSE      // 풀 (큐 100%, 생성 일시정지)
-}
-```
+#### 3.2.3 PipelineCoordinator (Simplified)
+- Perception은 기본적으로 **Blocking 방식**의 캡처를 수행하므로, 복잡한 큐 기반 배압(Back-pressure) 로직이 불필요.
+- 대신, 디스크 쓰기 속도 저하 등으로 인한 프레임 드롭 여부를 모니터링.
 
 ---
 

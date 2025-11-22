@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Forge - 세션 상세</title>
+    <style>
+        :root {
+            --bg-color: #0F1115;
+            --panel-bg: #1A1D24;
+            --text-primary: #FFFFFF;
+            --text-secondary: #A0A0A0;
+            --accent-primary: #2B67F6;
+            --status-success: #1DAA3E;
+            --status-warning: #F5A524;
+            --status-error: #E63946;
+            --border-color: #2E323B;
+            --font-family: 'Pretendard', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            font-family: var(--font-family);
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Header */
+        header {
+            height: 60px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            padding: 0 24px;
+            background-color: var(--panel-bg);
+            justify-content: space-between;
+        }
+
+        .logo {
+            font-weight: 700;
+            font-size: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .logo span {
+            color: var(--accent-primary);
+        }
+
+        .breadcrumb {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        .breadcrumb span.active {
+            color: var(--text-primary);
+            font-weight: 500;
+        }
+
+        /* Layout */
+        .container {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        .top-bar {
+            padding: 16px 24px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background-color: var(--bg-color);
+        }
+
+        .session-title {
+            font-size: 20px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .badge {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .badge.running {
+            background: rgba(29, 170, 62, 0.15);
+            color: var(--status-success);
+        }
+
+        .tabs {
+            display: flex;
+            gap: 24px;
+            border-bottom: 1px solid var(--border-color);
+            padding: 0 24px;
+            background-color: var(--panel-bg);
+        }
+
+        .tab {
+            padding: 16px 0;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            border-bottom: 2px solid transparent;
+        }
+
+        .tab.active {
+            color: var(--accent-primary);
+            border-bottom-color: var(--accent-primary);
+        }
+
+        /* Content Area */
+        .content {
+            flex: 1;
+            padding: 24px;
+            overflow-y: auto;
+            display: grid;
+            grid-template-columns: 3fr 1fr;
+            gap: 24px;
+        }
+
+        .card {
+            background-color: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 24px;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .card-title {
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        /* Camera Grid */
+        .camera-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 16px;
+        }
+
+        .camera-preview {
+            background-color: #000;
+            aspect-ratio: 16/9;
+            border-radius: 6px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .camera-overlay {
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            color: white;
+        }
+
+        .bbox-overlay {
+            position: absolute;
+            border: 1px solid #0f0;
+            /* Mock bbox */
+        }
+
+        /* Metrics Sidebar */
+        .metrics-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .metric-box {
+            background-color: rgba(255, 255, 255, 0.03);
+            padding: 16px;
+            border-radius: 6px;
+        }
+
+        .metric-label {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+        }
+
+        .metric-value {
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        .metric-sub {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        .log-panel {
+            background-color: #111;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 12px;
+            font-family: monospace;
+            font-size: 12px;
+            height: 200px;
+            overflow-y: auto;
+            color: #ddd;
+        }
+
+        .log-entry {
+            margin-bottom: 4px;
+        }
+
+        .log-entry.warn {
+            color: var(--status-warning);
+        }
+
+        .log-entry.info {
+            color: #888;
+        }
+    </style>
+</head>
+
+<body>
+
+    <header>
+        <div class="logo"><span>⚡</span> FORGE ENGINE</div>
+        <div class="breadcrumb">
+            <span>세션</span>
+            <span>/</span>
+            <span class="active">factory_sim_01</span>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="top-bar">
+            <div class="session-title">
+                factory_sim_01
+                <span class="badge running">실행 중</span>
+            </div>
+            <div style="display: flex; gap: 16px; font-size: 14px;">
+                <span style="color: var(--text-secondary)">Scene:</span> Factory_Floor_A
+                <span style="color: var(--text-secondary)">품질:</span> 엄격 (Strict)
+            </div>
+        </div>
+
+        <div class="tabs">
+            <div class="tab active">개요 & 카메라</div>
+            <div class="tab">검증 (Validation)</div>
+            <div class="tab">통계 (Statistics)</div>
+            <div class="tab">매니페스트 (Manifest)</div>
+        </div>
+
+        <div class="content">
+            <!-- Left Column: Cameras -->
+            <div>
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">실시간 미리보기 (활성 카메라: 6)</div>
+                        <button
+                            style="background:none; border:1px solid #444; color:#aaa; padding:4px 8px; border-radius:4px; cursor:pointer;">자동
+                            새로고침: 켜짐</button>
+                    </div>
+                    <div class="camera-grid">
+                        <div class="camera-preview">
+                            <div class="camera-overlay">cam_01_overhead</div>
+                            <!-- Mock Content -->
+                            <div
+                                style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; color:#333;">
+                                [스트림]</div>
+                        </div>
+                        <div class="camera-preview">
+                            <div class="camera-overlay">cam_02_conveyor</div>
+                            <div
+                                style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; color:#333;">
+                                [스트림]</div>
+                        </div>
+                        <div class="camera-preview">
+                            <div class="camera-overlay">cam_03_entrance</div>
+                            <div
+                                style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; color:#333;">
+                                [스트림]</div>
+                        </div>
+                        <div class="camera-preview">
+                            <div class="camera-overlay">bot_cam_01</div>
+                            <div
+                                style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; color:#333;">
+                                [스트림]</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">최근 로그</div>
+                    </div>
+                    <div class="log-panel">
+                        <div class="log-entry info">[14:20:01] Frame 12340 생성됨 (14.2ms)</div>
+                        <div class="log-entry info">[14:20:01] Frame 12341 생성됨 (13.8ms)</div>
+                        <div class="log-entry warn">[14:20:02] CaptureQueue 배압 경고 (depth=0.75)</div>
+                        <div class="log-entry info">[14:20:02] Frame 12342 생성됨 (15.1ms)</div>
+                        <div class="log-entry info">[14:20:02] Frame 12343 생성됨 (14.0ms)</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column: Metrics -->
+            <div class="metrics-panel">
+                <div class="card">
+                    <div class="metric-box">
+                        <div class="metric-label">현재 FPS</div>
+                        <div class="metric-value">14.5</div>
+                        <div class="metric-sub">목표: 15.0</div>
+                    </div>
+                    <div class="metric-box" style="margin-top:12px;">
+                        <div class="metric-label">진행률</div>
+                        <div class="metric-value">12.3%</div>
+                        <div class="metric-sub">12,345 / 100,000</div>
+                        <div style="width:100%; height:4px; background:#333; margin-top:8px; border-radius:2px;">
+                            <div style="width:12.3%; height:100%; background:var(--accent-primary);"></div>
+                        </div>
+                    </div>
+                    <div class="metric-box" style="margin-top:12px;">
+                        <div class="metric-label">예상 남은 시간</div>
+                        <div class="metric-value">1시간 42분</div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">파이프라인 상태</div>
+                    </div>
+                    <div style="font-size:13px; display:flex; justify-content:space-between; margin-bottom:8px;">
+                        <span style="color:#aaa">캡처 (Capture)</span>
+                        <span style="color:var(--status-warning)">높음 (75%)</span>
+                    </div>
+                    <div style="font-size:13px; display:flex; justify-content:space-between; margin-bottom:8px;">
+                        <span style="color:#aaa">라벨링 (Annotation)</span>
+                        <span style="color:var(--status-success)">정상 (12%)</span>
+                    </div>
+                    <div style="font-size:13px; display:flex; justify-content:space-between; margin-bottom:8px;">
+                        <span style="color:#aaa">인코딩 (Encoding)</span>
+                        <span style="color:var(--status-success)">정상 (45%)</span>
+                    </div>
+                    <div style="font-size:13px; display:flex; justify-content:space-between;">
+                        <span style="color:#aaa">저장 (Storage)</span>
+                        <span style="color:var(--status-success)">정상 (5%)</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</body>
+
+</html>
