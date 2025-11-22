@@ -126,7 +126,7 @@ Forge의 Checkpoint 및 복구 메커니즘을 정의한다.
 ```
 
 > **Naming 규칙:** 모든 필드명은 `docs/design/common/terminology.md`를 따른다. 예를 들어 Storage 기준 프레임 상태는 `lastStoredFrame`, 큐 길이 정보는 `queueDepths` 한 이름만 사용한다.  
-> **스키마 참조:** 추후 `docs/design/schema/checkpoint.schema.json`으로 정식 JSON Schema를 제공하고, Architecture/ClassDesign/API 문서에서 동일 스키마를 참고하도록 한다.
+> **스키마 참조:** 추후 `docs/design/schema/checkpoint.schema.json`으로 정식 JSON Schema를 제공할 예정이다(현재 저장소 미포함). 스키마가 추가되기 전까지는 본 절의 JSON 구조와 필드 설명을 단일 소스로 사용하며, Architecture/ClassDesign/API 문서에서 동일 구조를 참고하도록 한다.
 
 ---
 

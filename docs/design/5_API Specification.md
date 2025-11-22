@@ -87,6 +87,7 @@ Config에서 `simulation.gateway.mode=remote` 혹은 `distributed`를 설정하�
 | `POST /scenario/activate` | 런타임 Scene/환경 전환 (Phase 2+) | `sceneName`, `timeWeather`, `randomization` | `{status:"success"}`      | Scene 전환 완료 후 응답, 버전 체크 포함  |
 | `GET /status`             | 실행 상태 확인                   | 쿼리 없음                                       | `{status:"running", ...}` | 모니터링/Progress UI, 인증 옵션 선택    |
 | `GET /session/{id}/stream` | 실시간 진행률 SSE (Phase 2+)     | `id` (sessionId)                               | `text/event-stream`       | 1초 간격 progress/FPS/event push       |
+| `GET /session/{id}/cameras/{cameraId}/latest` | 최신 프레임 이미지 조회 (Live Preview) | `id`, `cameraId`, `width`(opt) | `image/jpeg` | UI 모니터링용, 썸네일 리사이징 지원 |
 
 #### `POST /session/init`
 
@@ -188,7 +189,7 @@ Config에서 `simulation.gateway.mode=remote` 혹은 `distributed`를 설정하�
 | `mobileCameras[]` | object[] | mobile 존재 시 | `id`, `poseTimestamp`, `position`, `rotationEuler` |
 | `warnings[]` | string[] | 선택 | 사용자에게 알려야 할 경고 메시지 |
 
-응답 스키마는 `docs/config/schema/status.schema.json`으로 정의하며, Test Strategy 문서의 `/status` 계약 테스트가 이를 검증한다.
+응답 스키마는 향후 `docs/design/schema/status.schema.json`(현재 저장소에는 포함되어 있지 않음)에 정의하고, Test Strategy 문서의 `/status` 계약 테스트가 이를 검증하도록 계획한다. 스키마 추가 전까지는 본 섹션의 표를 단일 소스(True Source)로 취급한다.
 
 CLI/SDK 구성 시:
 - `dotnet run -- --api-key <KEY>` 형식으로 API Key를 전달하거나,
@@ -203,6 +204,7 @@ CLI/SDK 구성 시:
   ```
   event: progress
   data: {"timestamp":"2025-03-01T10:00:00Z","frame":45210,"fps":18.4,"queueDepth":{"capture":0.3,"encode":0.6}}
+  // queueDepth는 /status와 달리 워커별 상세 수치를 포함한다.
 
   event: warning
   data: {"code":"QUEUE_BACKPRESSURE","level":"warn","message":"Capture queue 95%"}
@@ -215,6 +217,18 @@ CLI/SDK 구성 시:
 - `Last-Event-ID`를 지원해 재연결 시 손실 최소화
 - 세션 종료 시 `event: completed` 전송 후 스트림 종료
 - 인증 실패/세션 없음: 즉시 401/404 후 종료
+
+#### `GET /session/{id}/cameras/{cameraId}/latest`
+
+- **Purpose**: UI의 Live Preview 탭에서 특정 카메라의 가장 최근 생성된 프레임을 조회한다.
+- **Parameters**:
+  - `width` (query, optional): 요청 폭(px). 지정 시 비율 유지하며 리사이징. (예: `?width=320`). 대역폭 절약을 위해 UI에서는 썸네일 요청 권장.
+- **Response 200**:
+  - `Content-Type`: `image/jpeg`
+  - Body: Binary image data
+- **Response 404**: 세션이 없거나 해당 카메라 ID가 없음.
+- **Response 503**: 세션이 실행 중이 아니거나 이미지가 아직 생성되지 않음.
+- **Note**: Orchestration Layer는 최신 프레임 1장만 메모리에 캐싱하며, 이전 프레임은 조회할 수 없다.
 
 ### 3.4 Rate Limiting & Throttling
 
@@ -584,3 +598,66 @@ Config의 `output.labelChannels[]` 배열을 통해 어떤 선택 채널이 활�
   ```
 - `status` 값: `pending`, `validating`, `ready`, `failed`
 - `failed` 시 `errors[]`에 구체 원인 제공, 재업로드 가이드 포함
+
+---
+
+## 6. API 버전 정책
+
+본 절은 기존 `docs/design/15_API_Versioning_Policy.md` 내용을 통합한 것으로, Forge API의 버전 체계와 변경/폐기 절차, 테스트 요구사항을 단일 문서에서 관리한다.
+
+### 6.1 버전 체계
+
+- **형식**: `v{MAJOR}.{MINOR}.{PATCH}` (`/api/v1/` 경로는 Major 버전)
+- **의미**
+  - **Major**: 하위 호환이 깨지는 변경 (엔드포인트 제거/대체, 스키마 필드 제거)
+  - **Minor**: 하위 호환 기능 추가 (필드 추가, 선택 파라미터 확장)
+  - **Patch**: 버그 수정·문서/스키마 정정 (동일 동작 유지)
+- **응답 헤더**
+  - `X-Engine-Version`: 엔진 구현 버전 (예: `1.4.0`)
+  - `X-Api-Version`: 현재 API 버전 (예: `v1.2.0`)
+  - `Supported-Versions`: 서버가 지원하는 Major 버전 배열 (예: `["v1","v1beta"]`)
+- **요청 헤더**
+  - `Accept-Version: v1` (생략 시 최신 안정 버전 선택)
+
+### 6.2 Deprecation 정책
+
+| 변경 유형 | 사전 공지 | 지원 기간 | 요구 조치 |
+|-----------|-----------|-----------|-----------|
+| Major | 1 release(최소 3개월) 전에 `Deprecated: true` 헤더 및 changelog 공지 | 최소 12개월 | 새 버전으로 마이그레이션, 이전 버전은 `sunsetDate`에 제거 |
+| Minor | 릴리즈 노트에 즉시 공지 | 1 release cycle | 선택 필드 추가이므로 기존 클라이언트 영향 없음 |
+| Patch | 필요 시 즉시 | 즉시 | API 동작 동일 |
+
+- `/status` 응답에 `deprecations[]`를 추가해 곧 제거될 버전을 명시한다.
+- Deprecated 버전은 `/api/v1beta` 형태로 1년간 병행 운영 후 `410 Gone`으로 전환한다.
+
+### 6.3 변경 관리 프로세스
+
+1. **RFC 제출** (`docs/rfcs/API-XXXX.md`): 변경 배경, 영향 범위, 마이그레이션 전략 포함.
+2. **스키마 업데이트**: `docs/design/schema/*.schema.json`과 본 문서를 동시에 갱신.
+3. **Backward Compatibility Test**: `tests/integration/ApiCompatibilityTests.cs`에서 이전 버전 fixture 실행.
+4. **CI 게이트**: `.github/workflows/docs-validation.yml`에서 `DocumentationContract` 카테고리로 schema diff 검증.
+5. **릴리즈 노트**: `CHANGELOG.md`에 Deprecated/Added/Removed 항목과 sunset 날짜를 기록.
+
+### 6.4 테스트 및 문서 요구사항
+
+- 모든 REST 엔드포인트는 본 문서와 동기화된 스키마(`status.schema.json`, `manifest.schema.json` 등)를 사용해야 한다.
+- Major 변경 시
+  - `tests/contracts/v{N-1}/` fixture 유지, 신규 버전은 `tests/contracts/vN/` 추가
+  - `ApiVersionMatrix.md`에 지원 조합(클라이언트 ↔ 서버) 명시
+- Minor 변경 시
+  - 기본값/선택 필드를 포함한 예제 요청·응답을 본 문서에 추가하고 `openapi.yaml`을 재생성
+
+### 6.5 역할과 책임
+
+| 역할 | 책임 |
+|------|------|
+| API Owner | RFC 승인, sunset 일정 관리 |
+| Tech Writer | API Spec/스키마/버전 정책 업데이트 |
+| QA 팀 | 호환성 테스트 및 CI 게이트 운영 |
+| Developer | 코드 변경 전 버전 정책 체크리스트 작성 |
+
+### 6.6 참고 문서
+
+- `docs/design/schema/manifest.schema.json`
+- `.github/workflows/docs-validation.yml`
+- `tests/contracts/` 및 `docs/rfcs/API-*.md`
