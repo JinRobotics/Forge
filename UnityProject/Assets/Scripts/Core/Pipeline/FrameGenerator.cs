@@ -2,6 +2,7 @@ using System.Collections;
 using System.IO;
 using UnityEngine;
 using Forge.Core.Session;
+using System.Linq;
 
 namespace Forge.Core.Pipeline
 {
@@ -20,6 +21,8 @@ namespace Forge.Core.Pipeline
         public string[] Warnings { get; private set; } = Array.Empty<string>();
         public float QueueDepthSummary => Backpressure;
         public float CaptureTimeMs { get; private set; }
+        private readonly System.Collections.Generic.Queue<float> _frameTimes = new System.Collections.Generic.Queue<float>();
+        private const int WindowSize = 30;
 
         private Coroutine _loop;
         private Camera[] _captureCameras = Array.Empty<Camera>();
@@ -42,7 +45,7 @@ namespace Forge.Core.Pipeline
         public void StartGeneration(SessionConfig config)
         {
             StopGeneration();
-            _captureCameras = FindObjectsOfType<Camera>();
+            _captureCameras = FindObjectsOfType<Camera>().Where(c => c.enabled).ToArray();
             if (_captureCameras.Length == 0)
             {
                 Debug.LogWarning("[FrameGenerator] No cameras found. Captures will be skipped.");
@@ -88,9 +91,14 @@ namespace Forge.Core.Pipeline
                 CaptureJpg(imagePath, config);
                 CaptureTimeMs = (Time.realtimeSinceStartup - start) * 1000f;
 
-                // 간단한 백프레셔 계산: (렌더+저장) 시간 측정 → 목표 FPS 대비 비율
-                float targetFrameTime = config.targetFps > 0 ? 1f / config.targetFps : 0.033f;
-                Backpressure = Mathf.Clamp01((CaptureTimeMs / 1000f) / targetFrameTime);
+                // 간단한 백프레셔 계산: 최근 WindowSize 평균 프레임시간 기반
+                _frameTimes.Enqueue(CaptureTimeMs);
+                while (_frameTimes.Count > WindowSize) _frameTimes.Dequeue();
+                float avgMs = 0f;
+                foreach (var t in _frameTimes) avgMs += t;
+                avgMs /= _frameTimes.Count;
+                float targetFrameTime = config.targetFps > 0 ? 1000f / config.targetFps : 33f;
+                Backpressure = Mathf.Clamp01(avgMs / targetFrameTime);
                 if (Backpressure > 0.7f)
                 {
                     Warnings = new[] { $"BACKPRESSURE_HIGH ({Backpressure:0.00})" };
@@ -99,6 +107,13 @@ namespace Forge.Core.Pipeline
                 {
                     Warnings = Array.Empty<string>();
                 }
+
+                // 진행률/추정 FPS 업데이트 (세션 스냅샷)
+                SessionManager.Instance.UpdateProgress(
+                    (float)CurrentFrame / config.totalFrames,
+                    CaptureTimeMs > 0 ? 1000f / CaptureTimeMs : 0f,
+                    Backpressure,
+                    Warnings);
 
                 // 프레임당 한 번씩 넘겨서 Unity 메인 루프를 쉬게 함
                 yield return null;

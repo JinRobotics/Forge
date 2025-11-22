@@ -94,11 +94,23 @@
         const prog = Math.min(100, Math.max(0, Math.round((d.progress || 0) * 100)));
         setText('sess-progress', prog + '%');
         renderSessions(d.sessions || []);
+        fetchSessions();
       } catch (e) {
         banner.style.display = 'block';
         setText('engine-status', '오프라인');
         const statusEl = document.getElementById('engine-status');
         statusEl.className = 'status err';
+      }
+    }
+
+    async function fetchSessions() {
+      try {
+        const res = await fetch('/api/sessions');
+        if (!res.ok) throw new Error();
+        const data = await res.json();
+        renderSessions(data.sessions || []);
+      } catch (e) {
+        // fallback: keep previous table
       }
     }
 
@@ -118,7 +130,7 @@
           <td><span class="badge ${s.status === 'running' ? 'running' : s.status === 'completed' ? 'completed' : ''}">${s.status || '-'}</span></td>
           <td>${(s.fps || 0).toFixed(2)}</td>
           <td class="progress"><div class="bar"><div class="fill" style="width:${prog}%;"></div></div>${prog}%</td>
-          <td>${s.qualityMode || '-'}</td>
+          <td>${s.qualityMode || '-'} / BP ${(s.backpressure||0).toFixed(2)}</td>
           <td>${s.updatedAt || '-'}</td>
         `;
         tbody.appendChild(row);

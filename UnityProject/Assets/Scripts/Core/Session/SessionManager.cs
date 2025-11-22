@@ -35,6 +35,7 @@ namespace Forge.Core.Session
         public static SessionManager Instance { get; private set; }
         public SessionConfig CurrentConfig { get; private set; }
         public bool IsSessionRunning { get; private set; }
+        private readonly List<SessionSnapshot> _sessions = new List<SessionSnapshot>();
 
         private void Awake()
         {
@@ -51,10 +52,12 @@ namespace Forge.Core.Session
                 SessionConfigValidator.Validate(CurrentConfig);
 
                 Debug.Log($"[SessionManager] Loaded config for session: {CurrentConfig.sessionId}");
+                UpsertSessionSnapshot("ready", 0f, 0f);
             }
             catch (Exception e)
             {
                 Debug.LogError($"[SessionManager] Failed to load config: {e.Message}");
+                throw;
             }
         }
 
@@ -95,6 +98,8 @@ namespace Forge.Core.Session
             {
                 Debug.LogWarning("[SessionManager] FrameGenerator not found in scene.");
             }
+
+            UpsertSessionSnapshot("running", 0f, CurrentConfig.targetFps);
         }
 
         public void StopSession()
@@ -104,6 +109,8 @@ namespace Forge.Core.Session
             // Perception usually stops automatically after totalIterations, 
             // but we can force stop or cleanup here.
             FrameGenerator.Instance?.StopGeneration();
+
+            UpsertSessionSnapshot("stopped", 1f, 0f);
         }
 
         // InitializeScene is no longer needed as Perception handles scene setup via Randomizers
@@ -165,5 +172,48 @@ namespace Forge.Core.Session
                 }
             }
         }
+
+        public IReadOnlyList<SessionSnapshot> GetSessions() => _sessions.AsReadOnly();
+
+        public void UpdateProgress(float progress, float fps, float backpressure, string[] warnings)
+        {
+            if (CurrentConfig == null) return;
+            UpsertSessionSnapshot(IsSessionRunning ? "running" : "stopped", progress, fps, backpressure, warnings);
+        }
+
+        private void UpsertSessionSnapshot(string status, float progress, float fps, float backpressure = 0f, string[] warnings = null)
+        {
+            if (CurrentConfig == null) return;
+            var snap = _sessions.Find(s => s.sessionId == CurrentConfig.sessionId);
+            if (snap == null)
+            {
+                snap = new SessionSnapshot { sessionId = CurrentConfig.sessionId };
+                _sessions.Add(snap);
+            }
+            snap.status = status;
+            snap.progress = progress;
+            snap.qualityMode = CurrentConfig.qualityMode;
+            snap.frameRatePolicy = CurrentConfig.frameRatePolicy;
+            snap.updatedAt = DateTime.UtcNow.ToString("o");
+            snap.fps = fps;
+            snap.totalFrames = CurrentConfig.totalFrames;
+            snap.backpressure = backpressure;
+            snap.warnings = warnings ?? Array.Empty<string>();
+        }
+    }
+
+    [Serializable]
+    public class SessionSnapshot
+    {
+        public string sessionId;
+        public string status;
+        public float progress;
+        public string qualityMode;
+        public string frameRatePolicy;
+        public string updatedAt;
+        public float fps;
+        public int totalFrames;
+        public float backpressure;
+        public string[] warnings;
     }
 }

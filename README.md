@@ -1,3 +1,5 @@
+![Banner](https://github.com/JinRobotics/Forge/blob/main/assets/banner.png?raw=true)
+
 # Forge: Synthetic Data Generation Engine
 
 Forge는 **Unity Perception** 기반의 합성 데이터 생성 엔진입니다.

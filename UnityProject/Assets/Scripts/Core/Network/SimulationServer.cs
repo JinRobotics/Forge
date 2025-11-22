@@ -96,6 +96,13 @@ namespace Forge.Core.Network
             {
                 switch (request.Url.AbsolutePath)
                 {
+                    case "/sessions":
+                        {
+                            var sessions = SessionManager.Instance != null ? SessionManager.Instance.GetSessions() : Array.Empty<Forge.Core.Session.SessionSnapshot>();
+                            responseString = JsonUtility.ToJson(new Wrapper<Forge.Core.Session.SessionSnapshot> { sessions = sessions });
+                            response.ContentType = "application/json";
+                            break;
+                        }
                     case "/session/init":
                         if (request.HttpMethod != "POST") { statusCode = 405; break; }
                         using (var reader = new StreamReader(request.InputStream, request.ContentEncoding))
@@ -155,6 +162,7 @@ namespace Forge.Core.Network
             int currentFrame = frameGen != null ? frameGen.CurrentFrame : (scenario != null ? scenario.CurrentIteration : 0);
             int totalFrames = scenario != null ? scenario.TotalIterations : Math.Max(manager?.CurrentConfig?.totalFrames ?? 1, 1);
             var warnings = frameGen != null ? frameGen.Warnings : new string[0];
+            var sessions = manager != null ? manager.GetSessions() : Array.Empty<Forge.Core.Session.SessionSnapshot>();
 
             var status = new
             {
@@ -170,10 +178,17 @@ namespace Forge.Core.Network
                 captureTimeMs = frameGen != null ? frameGen.CaptureTimeMs : 0f,
                 qualityMode = manager?.CurrentConfig?.qualityMode ?? "strict",
                 frameRatePolicy = manager?.CurrentConfig?.frameRatePolicy ?? "quality_first",
-                warnings = warnings
+                warnings = warnings,
+                sessions = sessions
             };
 
             json = JsonUtility.ToJson(status);
+        }
+
+        [Serializable]
+        private class Wrapper<T>
+        {
+            public T[] sessions;
         }
     }
 }
